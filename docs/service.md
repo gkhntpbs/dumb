@@ -32,11 +32,11 @@ from a temp dir and removes it again:
 `~/Library/LaunchAgents` as a background item: installing shows a "Background
 Items Added" notification, and the user can switch `dumb-worker` off in
 `System Settings > General > Login Items & Extensions` (then launchd will not
-start it). After `service uninstall` the BTM record (`sfltool dumpbtm`, type
+start it). Right after `service uninstall` the BTM record (`sfltool dumpbtm`, type
 "legacy agent", name `dumb-worker`) was still listed, pointing at the deleted
-plist; nothing runs from it. macOS has no per-item removal, only the global
-`sfltool resetbtm`, which resets every app's background items — do not use it
-for this.
+plist; about three minutes later, with no login or reboot, macOS had pruned it
+on its own. Never use `sfltool resetbtm` for this: it resets every app's
+background items.
 
 ### How to verify after a reboot
 
@@ -64,8 +64,7 @@ Not testable by an agent; to be done by hand once:
 6. Also check `System Settings > General > Login Items & Extensions` lists
    `dumb-worker` as allowed, and `sfltool dumpbtm | grep -A8 'Name: dumb-worker'`.
 7. Clean up: `./dumb-worker service uninstall`, stop the server, `rm -rf ~/dumb-reboot-test`.
-   Afterwards (and after one more login) note whether the BTM record from step 6
-   disappeared on its own.
+   A few minutes later `sfltool dumpbtm | grep 'Name: dumb-worker'` should be empty.
 
 ## Linux system unit
 
