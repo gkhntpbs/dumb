@@ -1,0 +1,30 @@
+# DUMB — Distributed User-owned Model Backend
+
+Run AI requests on machines you own, wherever they are, and fall back to the cloud when
+none of them are online.
+
+- **Pull, not push.** Workers long-poll the server over outbound HTTPS. No open ports, no
+  tunnels, no VPN; a worker behind any home NAT just works.
+- **Ollama does the inference.** The worker is a small background daemon that manages a
+  local Ollama (installs it or uses the existing one) and talks to it on `127.0.0.1` only.
+- **Fallback.** When no worker answers in time, the caller takes its cloud path instead.
+- **Signed, atomic, reversible updates** from GitHub Releases.
+
+Status: early design. Nothing here is usable yet.
+
+## Layout
+
+```
+cmd/dumb-server   job queue + long-poll endpoints
+cmd/dumb-worker   background worker
+internal/protocol wire types (authority: docs/protocol/openapi.yaml)
+```
+
+## Security
+
+See [SECURITY.md](SECURITY.md). This repository is written to be safe while fully public:
+secrets, signing keys and deployment details are never part of it.
+
+## License
+
+MIT

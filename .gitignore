@@ -1,0 +1,23 @@
+.DS_Store
+.env.local
+.env.*.local
+node_modules/
+
+# QA çıktıları — her koşuda yeniden üretilir
+qa-automation/**/results/*
+!qa-automation/**/results/.gitkeep
+qa-automation/**/undefined/
+.maestro/
+test-results/
+playwright-report/
+
+# Go
+/dist/
+/bin/
+*.test
+*.out
+
+# Never commit keys or env
+.env
+*.pem
+*.key

@@ -1,0 +1,8 @@
+openapi: 3.1.0
+info:
+  title: DUMB worker protocol
+  version: "1"
+  description: >
+    Contract between dumb-server and dumb-worker. Workers only make outbound
+    HTTPS requests: they long-poll for a job and post its result.
+paths: {}

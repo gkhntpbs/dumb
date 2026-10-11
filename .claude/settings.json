@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c 'import json,os; base=os.environ.get(\"CLAUDE_PROJECT_DIR\") or os.getcwd(); p=os.path.join(base,\".claude/session-commands.txt\"); t=open(p,encoding=\"utf-8\").read() if os.path.exists(p) else \"\"; print(json.dumps({\"systemMessage\":t.rstrip(),\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":t}}) if t else \"\")'"
+          }
+        ]
+      }
+    ]
+  }
+}
