@@ -1,9 +1,9 @@
 # AGENTS.md — DUMB core
 
 DUMB (Distributed User-owned Model Backend): the protocol, the server (`cmd/dumb-server`), the
-worker (`cmd/dumb-worker`) and the `Auth` interface, in Go. **Status:** skeleton — the module
-builds and both binaries only print their protocol version. Next: the protocol in
-`docs/protocol/openapi.yaml`, then the server's queue and long-poll endpoints.
+worker (`cmd/dumb-worker`) and the `Auth` interface, in Go. **Status:** protocol v1 is defined; the server
+has an in-memory queue with leases, long-poll and caller endpoints, and a static-token `Auth`.
+The worker is still a stub. Next: the worker (see `TODO.md`).
 
 > **Session start:** read `.claude/session-commands.txt` and briefly show the user the skills.
 
@@ -14,6 +14,9 @@ builds and both binaries only print their protocol version. Next: the protocol i
 | `cmd/dumb-server/` | Job queue + long-poll endpoints | **ACTIVE** |
 | `cmd/dumb-worker/` | Background worker: manages the local Ollama, self-updates | **ACTIVE** |
 | `internal/protocol/` | Wire types — the authority is `docs/protocol/openapi.yaml` | **ACTIVE** |
+| `internal/queue/` | In-memory job queue with leases | **ACTIVE** |
+| `internal/server/` | HTTP handlers for the protocol | **ACTIVE** |
+| `internal/auth/` | `Authenticator` interface + `StaticTokens` reference (hash-only, revocable) | **ACTIVE** |
 | `docs/` | Protocol and design docs | — |
 | `qa-automation/` | Build gate (unit tests only) | **ACTIVE** — follow `qa-automation/README.md` |
 

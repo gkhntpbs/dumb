@@ -5,14 +5,16 @@ Status: `[ ]` to do · `[~]` partial / investigating · `[x]` done
 ---
 
 ## Protocol
-- [ ] Define the worker protocol in `docs/protocol/openapi.yaml`: `GET /v1/jobs/next?wait=` (long-poll), `POST /v1/jobs/{id}/result`, worker hello (version, models, capacity). → verify: spec validates; Go types in `internal/protocol` match it.
-- [ ] Define the caller API: submit a job, wait for its result with a deadline. → verify: spec validates.
-- [ ] Minimum-worker-version answer (like a client floor): an outdated worker gets a clear error, not a broken job. → verify: test.
+- [x] Define the worker protocol in `docs/protocol/openapi.yaml`: `GET /v1/jobs/next?wait=` (long-poll), `POST /v1/jobs/{id}/result`, worker hello (version, models, capacity). → verify: spec validates; Go types in `internal/protocol` match it.
+- [x] Define the caller API: submit a job, wait for its result with a deadline. → verify: spec validates.
+- [x] Minimum-worker-version answer (like a client floor): an outdated worker gets a clear error, not a broken job. → verify: test.
 
 ## Server
-- [ ] In-memory queue with leases; a lease that expires is not re-dispatched (the caller's deadline has passed). → verify: unit tests for claim / complete / expiry.
-- [ ] Long-poll endpoint that returns the moment a job is queued. → verify: test measures added latency < 50ms.
-- [ ] "Is anyone online" answer, so callers skip waiting when no worker is connected. → verify: test.
+- [ ] Enforce the capacity announced in hello (today a worker limits itself by how many polls it runs). → verify: test.
+- [ ] Request-id / structured logging for claim, result and expiry. → verify: log lines in a test.
+- [x] In-memory queue with leases; a lease that expires is not re-dispatched (the caller's deadline has passed). → verify: unit tests for claim / complete / expiry.
+- [x] Long-poll endpoint that returns the moment a job is queued. → verify: test measures added latency < 50ms.
+- [x] "Is anyone online" answer, so callers skip waiting when no worker is connected. → verify: test.
 
 ## Worker
 - [ ] Detect an existing Ollama; install it the official way when absent. → verify: `doctor` reports both cases correctly.
@@ -27,9 +29,9 @@ Status: `[ ]` to do · `[~]` partial / investigating · `[x]` done
 - [ ] Channels (`stable` / `beta`). → verify: a beta release reaches only beta workers.
 
 ## Security
-- [ ] `Auth` interface (per-worker credential, revocable, only a hash stored) + a simple static-token reference implementation. → verify: tests for missing / wrong / revoked credentials (401).
-- [ ] Request body limits and rate limits on worker endpoints. → verify: test.
-- [ ] A result is accepted only from the worker that holds the lease. → verify: test.
+- [x] `Auth` interface (per-worker credential, revocable, only a hash stored) + a simple static-token reference implementation. → verify: tests for missing / wrong / revoked credentials (401).
+- [~] Request body limits and rate limits on worker endpoints. → verify: test. *Body limit (1 MiB, `TestBodyLimit`) done; rate limits not yet.*
+- [x] A result is accepted only from the worker that holds the lease. → verify: test.
 
 ## Repository
 - [ ] CI runs `qa-automation/scripts/build-gate.sh`. → verify: a failing test turns CI red.

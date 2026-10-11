@@ -1,8 +1,320 @@
 openapi: 3.1.0
 info:
-  title: DUMB worker protocol
+  title: DUMB protocol
   version: "1"
+  license:
+    name: MIT
+    identifier: MIT
   description: >
-    Contract between dumb-server and dumb-worker. Workers only make outbound
-    HTTPS requests: they long-poll for a job and post its result.
-paths: {}
+    DUMB (Distributed User-owned Model Backend) contract. Two audiences share one
+    server:
+
+
+    * **Workers** only make outbound HTTPS requests. They introduce themselves
+    (hello), long-poll for a job and post its result. Every worker request carries
+    `X-DUMB-Worker-Version`; a worker below the server's minimum gets `426` on any
+    endpoint, never a job.
+
+    * **Callers** (other apps) submit a job with a deadline and may wait for the
+    result in the same request. When no worker can serve the model the server
+    answers `503` immediately so the caller can take its cloud path at once.
+
+
+    A job's lease ends at the job's deadline. A job whose lease expires is never
+    dispatched again: the caller has already given up on it.
+servers:
+  - url: https://dumb.example.invalid
+security:
+  - bearer: []
+tags:
+  - name: worker
+    description: Endpoints a worker calls (outbound only).
+  - name: caller
+    description: Endpoints an app calls to get AI work done.
+paths:
+  /v1/workers/hello:
+    post:
+      tags: [worker]
+      operationId: workerHello
+      summary: Introduce a worker and learn the server's floor.
+      parameters:
+        - $ref: "#/components/parameters/WorkerVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HelloRequest" }
+      responses:
+        "200":
+          description: Accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HelloResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "426": { $ref: "#/components/responses/UpgradeRequired" }
+  /v1/jobs/next:
+    get:
+      tags: [worker]
+      operationId: claimJob
+      summary: Long-poll for the next job this worker can run.
+      description: >
+        Returns the moment a matching job is queued. The worker must have sent
+        hello first; only jobs for the models it announced are handed out.
+      parameters:
+        - $ref: "#/components/parameters/WorkerVersion"
+        - name: wait
+          in: query
+          description: Go duration (e.g. `25s`). Capped at the server's `max_wait`.
+          schema: { type: string, default: 25s }
+      responses:
+        "200":
+          description: A job, leased to this worker until `lease_expires_at`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assignment" }
+        "204":
+          description: No job arrived within `wait`.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: The worker has not sent hello.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "426": { $ref: "#/components/responses/UpgradeRequired" }
+  /v1/jobs/{id}/result:
+    post:
+      tags: [worker]
+      operationId: submitResult
+      summary: Post the result of a leased job.
+      parameters:
+        - $ref: "#/components/parameters/WorkerVersion"
+        - $ref: "#/components/parameters/JobID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResultRequest" }
+      responses:
+        "204":
+          description: Result accepted.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: The lease has expired, is unknown, or belongs to another worker.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "426": { $ref: "#/components/responses/UpgradeRequired" }
+  /v1/jobs:
+    post:
+      tags: [caller]
+      operationId: submitJob
+      summary: Submit a job, optionally waiting for its result.
+      parameters:
+        - name: wait
+          in: query
+          description: >
+            Go duration (e.g. `1500ms`). If the result arrives within it, it is
+            returned in this response. Never longer than the job's deadline.
+          schema: { type: string, default: 0s }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubmitRequest" }
+      responses:
+        "200":
+          description: Finished within `wait`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobStatus" }
+        "202":
+          description: Queued or running; poll `GET /v1/jobs/{id}`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobStatus" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "410":
+          description: The deadline passed without a result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobStatus" }
+        "503":
+          description: No online worker serves this model. Take the fallback path now.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /v1/jobs/{id}:
+    get:
+      tags: [caller]
+      operationId: getJob
+      summary: Wait for a job's result.
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+        - name: wait
+          in: query
+          description: Go duration. Never longer than the job's deadline.
+          schema: { type: string, default: 0s }
+      responses:
+        "200":
+          description: Finished (`done` or `failed`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobStatus" }
+        "202":
+          description: Still queued or running.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobStatus" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Unknown job.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "410":
+          description: The deadline passed without a result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobStatus" }
+  /v1/status:
+    get:
+      tags: [caller]
+      operationId: getStatus
+      summary: Is anyone online?
+      responses:
+        "200":
+          description: Current worker availability.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: >
+        Per-principal opaque token. Workers and callers hold different roles; a
+        worker token cannot submit jobs and a caller token cannot claim them.
+  parameters:
+    WorkerVersion:
+      name: X-DUMB-Worker-Version
+      in: header
+      required: true
+      description: The worker's semantic version, e.g. `1.4.2`.
+      schema: { type: string, pattern: '^v?\d+\.\d+\.\d+$' }
+    JobID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Missing, wrong or revoked credential, or the wrong role.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    UpgradeRequired:
+      description: The worker is older than `min_worker_version`. Update before retrying.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/UpgradeError" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+    UpgradeError:
+      type: object
+      required: [error, min_worker_version]
+      properties:
+        error: { type: string }
+        min_worker_version: { type: string }
+    HelloRequest:
+      type: object
+      required: [worker_version, protocol_version, models, capacity]
+      properties:
+        worker_version: { type: string }
+        protocol_version: { type: integer, minimum: 1 }
+        models:
+          type: array
+          items: { type: string }
+          description: Ollama model names present on this worker.
+        capacity:
+          type: integer
+          minimum: 1
+          description: Jobs this worker can run at the same time.
+    HelloResponse:
+      type: object
+      required: [worker_id, min_worker_version, max_wait]
+      properties:
+        worker_id: { type: string }
+        min_worker_version: { type: string }
+        max_wait:
+          type: string
+          description: Longest `wait` the server honours on `GET /v1/jobs/next`.
+    SubmitRequest:
+      type: object
+      required: [model, prompt, deadline_ms]
+      properties:
+        model: { type: string }
+        prompt: { type: string }
+        system: { type: string }
+        format:
+          type: string
+          enum: ["", json]
+          description: "`json` asks the model for strict JSON output."
+        deadline_ms:
+          type: integer
+          minimum: 1
+          maximum: 600000
+          description: Time from submission after which the result is useless.
+    Assignment:
+      type: object
+      required: [job_id, lease_id, lease_expires_at, model, prompt]
+      properties:
+        job_id: { type: string }
+        lease_id: { type: string }
+        lease_expires_at: { type: string, format: date-time }
+        model: { type: string }
+        prompt: { type: string }
+        system: { type: string }
+        format: { type: string }
+    ResultRequest:
+      type: object
+      required: [lease_id]
+      description: Exactly one of `output` or `error`.
+      properties:
+        lease_id: { type: string }
+        output: { type: string }
+        error: { type: string }
+    JobStatus:
+      type: object
+      required: [job_id, state]
+      properties:
+        job_id: { type: string }
+        state:
+          type: string
+          enum: [queued, leased, done, failed, expired]
+        output: { type: string }
+        error: { type: string }
+    Status:
+      type: object
+      required: [workers_online, models]
+      properties:
+        workers_online: { type: integer }
+        models:
+          type: array
+          items: { type: string }
+          description: Models served by at least one online worker.
