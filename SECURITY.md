@@ -10,4 +10,11 @@ Design rules this project holds itself to:
 - Worker binaries are applied only after their signature verifies against a key
   embedded at build time (minisign over `checksums.txt`, then the archive's SHA-256;
   see `docs/release.md`). A new version that cannot reach the server is rolled back.
+- Every principal is rate limited (in-memory token buckets), and failed
+  authentication is limited per client IP: once an IP's bucket is empty its
+  requests get `429` before their token is checked. `X-Forwarded-For` is only
+  believed from configured trusted proxies (`DUMB_TRUSTED_PROXIES`).
+- Logs never contain tokens, prompts or outputs, only their sizes.
+- The Linux system unit runs as a dedicated `dumb` user under systemd sandboxing
+  (`docs/service.md`).
 - Nothing in this repository depends on being secret.

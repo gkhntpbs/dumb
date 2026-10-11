@@ -172,3 +172,42 @@ func TestPaths(t *testing.T) {
 		t.Error(p)
 	}
 }
+
+// TestSystemdSystemUnitHardening: the system unit runs as a dedicated user with
+// hardening that still lets self-update write next to the binary.
+func TestSystemdSystemUnitHardening(t *testing.T) {
+	c, _ := cfg(t, "linux")
+	user := SystemdUnit(c)
+	for _, not := range []string{"User=", "ProtectSystem=", "NoNewPrivileges="} {
+		if strings.Contains(user, not) {
+			t.Errorf("user unit must not carry %q (no privileges to drop):\n%s", not, user)
+		}
+	}
+	c.System = true
+	u := SystemdUnit(c)
+	svc := u[strings.Index(u, "[Service]"):strings.Index(u, "[Install]")]
+	for _, want := range []string{
+		"User=dumb", "Group=dumb", "NoNewPrivileges=yes", "ProtectSystem=strict",
+		`ReadWritePaths="/opt/dumb & co"`, "PrivateTmp=yes", "ProtectHome=read-only", "PrivateDevices=yes",
+		"CapabilityBoundingSet=\n", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "Restart=always",
+	} {
+		if !strings.Contains(svc, want) {
+			t.Errorf("[Service] lacks %q:\n%s", want, svc)
+		}
+	}
+	// Every line in [Service] is a Key=Value directive.
+	for _, l := range strings.Split(strings.TrimSpace(svc), "\n")[1:] {
+		if k, _, ok := strings.Cut(l, "="); !ok || k == "" || strings.ContainsAny(k, " \t") {
+			t.Errorf("bad directive %q", l)
+		}
+	}
+	c.User = "svc-dumb"
+	c.Binary = "/srv/100%/dumb-worker"
+	u = SystemdUnit(c)
+	if !strings.Contains(u, "User=svc-dumb\nGroup=svc-dumb") || !strings.Contains(u, `ReadWritePaths="/srv/100%%"`) {
+		t.Errorf("custom user / escaped path:\n%s", u)
+	}
+	if !strings.Contains(SystemUserHelp, "useradd --system") || !strings.Contains(SystemUserHelp, "-o dumb") {
+		t.Error("SystemUserHelp does not create the dumb user")
+	}
+}

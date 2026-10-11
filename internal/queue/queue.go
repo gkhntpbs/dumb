@@ -37,17 +37,30 @@ type job struct {
 	output   string
 	err      string
 	done     chan struct{} // closed when state becomes done, failed or expired
+
+	expireUnreported bool // expired, OnExpire not called yet
 }
 
 type Queue struct {
 	mu      sync.Mutex
 	jobs    map[string]*job
-	pending []*job        // FIFO of queued jobs
-	wake    chan struct{} // closed and replaced whenever a job is queued
+	pending []*job         // FIFO of queued jobs
+	leases  map[string]int // live leases per worker
+	wake    chan struct{}  // closed and replaced whenever a job is queued or a lease ends
+
+	// OnExpire, if set, is called (without the lock held) when a job's
+	// deadline passes before it finished; workerID is "" for a queued job.
+	OnExpire func(jobID, model, workerID string)
 }
 
 func New() *Queue {
-	return &Queue{jobs: map[string]*job{}, wake: make(chan struct{})}
+	return &Queue{jobs: map[string]*job{}, leases: map[string]int{}, wake: make(chan struct{})}
+}
+
+// wakeLocked wakes every blocked Claim.
+func (q *Queue) wakeLocked() {
+	close(q.wake)
+	q.wake = make(chan struct{})
 }
 
 func newID() string {
@@ -69,20 +82,23 @@ func (q *Queue) Submit(req protocol.SubmitRequest) string {
 	q.mu.Lock()
 	q.jobs[j.id] = j
 	q.pending = append(q.pending, j)
-	close(q.wake)
-	q.wake = make(chan struct{})
+	q.wakeLocked()
 	q.mu.Unlock()
 	time.AfterFunc(ttl, func() { q.expire(j) })
 	return j.id
 }
 
-// Claim blocks until a queued job for one of models is available, then leases
-// it to workerID. It returns nil, nil when ctx ends first.
-func (q *Queue) Claim(ctx context.Context, workerID string, models []string) (*protocol.Assignment, error) {
+// Claim blocks until a queued job for one of models is available and workerID
+// holds fewer than capacity live leases, then leases the job to workerID. It
+// returns nil, nil when ctx ends first.
+func (q *Queue) Claim(ctx context.Context, workerID string, models []string, capacity int) (*protocol.Assignment, error) {
 	for {
 		q.mu.Lock()
 		now := time.Now()
 		for i, j := range q.pending {
+			if q.leases[workerID] >= capacity {
+				break
+			}
 			if !slices.Contains(models, j.req.Model) || !now.Before(j.deadline) {
 				continue
 			}
@@ -90,6 +106,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, models []string) (*p
 			j.state = protocol.StateLeased
 			j.leaseID = newID()
 			j.workerID = workerID
+			q.leases[workerID]++
 			a := &protocol.Assignment{
 				JobID:          j.id,
 				LeaseID:        j.leaseID,
@@ -121,6 +138,7 @@ func (q *Queue) Complete(jobID, leaseID, workerID, output, errMsg string) error 
 	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID {
 		return ErrLease
 	}
+	q.endLeaseLocked(j)
 	if errMsg != "" {
 		j.state, j.err = protocol.StateFailed, errMsg
 	} else {
@@ -128,6 +146,39 @@ func (q *Queue) Complete(jobID, leaseID, workerID, output, errMsg string) error 
 	}
 	q.finishLocked(j)
 	return nil
+}
+
+// Release puts a leased job back at the front of the queue, as if it had never
+// been claimed. The server calls it when the assignment could not be delivered
+// (the long-poll was aborted in the instant the job was claimed). It reports
+// whether the job was requeued; a job past its deadline is left to expire.
+func (q *Queue) Release(jobID, leaseID string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	j, ok := q.jobs[jobID]
+	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || !time.Now().Before(j.deadline) {
+		return false
+	}
+	q.endLeaseLocked(j)
+	j.state, j.leaseID, j.workerID = protocol.StateQueued, "", ""
+	q.pending = slices.Insert(q.pending, 0, j)
+	q.wakeLocked()
+	return true
+}
+
+// Leases returns the number of live leases workerID holds.
+func (q *Queue) Leases(workerID string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.leases[workerID]
+}
+
+// endLeaseLocked frees the lease slot of a leased job and wakes waiting claims.
+func (q *Queue) endLeaseLocked(j *job) {
+	if q.leases[j.workerID]--; q.leases[j.workerID] <= 0 {
+		delete(q.leases, j.workerID)
+	}
+	q.wakeLocked()
 }
 
 // Wait blocks until the job finishes or ctx ends, then returns its status.
@@ -143,13 +194,15 @@ func (q *Queue) Wait(ctx context.Context, jobID string) (protocol.JobStatus, err
 	case <-ctx.Done():
 	}
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	// The caller's wait is usually clamped to the deadline, so it can end a hair
 	// before the expiry timer fires; a past deadline is expired either way.
 	if !time.Now().Before(j.deadline) {
 		q.expireLocked(j)
 	}
-	return protocol.JobStatus{JobID: j.id, State: j.state, Output: j.output, Error: j.err}, nil
+	st := protocol.JobStatus{JobID: j.id, State: j.state, Output: j.output, Error: j.err}
+	q.mu.Unlock()
+	q.notify(j)
+	return st, nil
 }
 
 // Deadline returns the job's deadline.
@@ -172,10 +225,13 @@ func (q *Queue) Pending() int {
 
 func (q *Queue) expire(j *job) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	q.expireLocked(j)
+	q.mu.Unlock()
+	q.notify(j)
 }
 
+// expireLocked marks an unfinished job expired. The OnExpire call is deferred
+// to notify, which runs once per job outside the lock.
 func (q *Queue) expireLocked(j *job) {
 	switch j.state {
 	case protocol.StateQueued:
@@ -183,11 +239,25 @@ func (q *Queue) expireLocked(j *job) {
 			q.pending = slices.Delete(q.pending, i, i+1)
 		}
 	case protocol.StateLeased:
+		q.endLeaseLocked(j)
 	default:
 		return
 	}
 	j.state = protocol.StateExpired
+	j.expireUnreported = true
 	q.finishLocked(j)
+}
+
+// notify calls OnExpire once for a job expireLocked has just expired.
+func (q *Queue) notify(j *job) {
+	q.mu.Lock()
+	report := j.expireUnreported
+	j.expireUnreported = false
+	id, m, w := j.id, j.req.Model, j.workerID
+	q.mu.Unlock()
+	if report && q.OnExpire != nil {
+		q.OnExpire(id, m, w)
+	}
 }
 
 func (q *Queue) finishLocked(j *job) {

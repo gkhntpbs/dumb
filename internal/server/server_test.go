@@ -27,12 +27,19 @@ type env struct {
 	tokens *auth.StaticTokens
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { return newEnvWith(t, nil) }
+
+// newEnvWith lets a test adjust the Config (Auth, MinWorkerVersion and MaxWait are preset).
+func newEnvWith(t *testing.T, adjust func(*Config)) *env {
 	t.Helper()
 	tokens := auth.NewStaticTokens()
 	tokens.Add("w1", auth.RoleWorker, workerToken)
 	tokens.Add("app", auth.RoleCaller, callerToken)
-	s, err := New(Config{Auth: tokens, MinWorkerVersion: "1.2.0", MaxWait: 2 * time.Second})
+	cfg := Config{Auth: tokens, MinWorkerVersion: "1.2.0", MaxWait: 2 * time.Second}
+	if adjust != nil {
+		adjust(&cfg)
+	}
+	s, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

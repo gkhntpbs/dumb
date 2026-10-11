@@ -11,8 +11,8 @@ Status: `[ ]` to do · `[~]` partial / investigating · `[x]` done
 
 ## Server
 - [x] Fix: a caller wait clamped to the deadline could return `queued` instead of `expired` (race with the expiry timer; `TestSubmitReturns202ThenExpires` was flaky). → verify: `TestWaitAtDeadlineReportsExpired`.
-- [ ] Enforce the capacity announced in hello (today a worker limits itself by how many polls it runs). → verify: test.
-- [ ] Request-id / structured logging for claim, result and expiry. → verify: log lines in a test.
+- [x] Enforce the capacity announced in hello (today a worker limits itself by how many polls it runs). → verify: test. *A poll beyond capacity waits (no 429) and returns the moment a lease ends, or 204; leases free on complete, fail and expiry (`TestCapacity`, `TestCapacityFreesOnExpiry`, `TestCapacityEnforced`; documented on `GET /v1/jobs/next`).*
+- [x] Request-id / structured logging for claim, result and expiry. → verify: log lines in a test. *`log/slog` JSON (`DUMB_LOG_LEVEL`); `X-Request-ID` kept when sane, else generated, echoed; hello/submit/claim/result INFO, expiry/401/429 WARN, 426 INFO, per-request DEBUG; sizes only (`TestStructuredLogging` also asserts tokens/prompt/system/output never appear). Live smoke showed the lines with request ids.*
 - [x] In-memory queue with leases; a lease that expires is not re-dispatched (the caller's deadline has passed). → verify: unit tests for claim / complete / expiry.
 - [x] Long-poll endpoint that returns the moment a job is queued. → verify: test measures added latency < 50ms.
 - [x] "Is anyone online" answer, so callers skip waiting when no worker is connected. → verify: test.
@@ -26,8 +26,10 @@ Status: `[ ]` to do · `[~]` partial / investigating · `[x]` done
 - [x] `GET /v1/workers/me`: side-effect-free credential/version check for `doctor`. → verify: `TestWhoAmI`, `TestTypesMatchSpec`, redocly lint.
 - [ ] Windows service: the binary does not implement the Service Control Manager protocol, so `sc.exe start` will time out. Needs SCM handling (stdlib `syscall` or an ADR for `golang.org/x/sys/windows/svc`). → verify: service starts on Windows.
 - [x] launchd `KeepAlive=true` restarts the worker every ~10s after exit code 3 (upgrade required). Hook the self-updater in, or use `KeepAlive: {SuccessfulExit: false}` with a backoff. → verify: an outdated worker does not spin. *On 426 the worker updates or stays up with a 15 min → 2 h backoff; exit code 3 is gone, exit 4 = restart (`TestUpgradeRequiredWithoutUpdateStaysUp`; `update-e2e.sh` run 2 shows "staying up" with no exit). Plist gains `ThrottleInterval` 10, Windows gains `sc.exe failure` restart actions (`TestPlistIsValidXML`, `TestInstallUninstall`).*
-- [ ] Linux system unit runs as root; add a dedicated `User=`. → verify: generated unit test.
-- [ ] Re-hello when Ollama's model list changes (today models are fixed by config). → verify: test.
+- [x] Linux system unit runs as root; add a dedicated `User=`. → verify: generated unit test. *`User=dumb` + hardening with the binary dir in `ReadWritePaths` (`TestSystemdSystemUnitHardening`); user creation in `docs/service.md` and printed by `service print/install -system`.*
+- [ ] Run the hardened system unit on a real Linux host: `systemd-analyze security`, a job, and a real self-update under `ProtectSystem=strict`. → verify: manual run.
+- [x] Re-hello when Ollama's model list changes (today models are fixed by config). → verify: test. *Every 60s; announces configured ∩ present; none present → no claims, logged, idle check-in via `GET /v1/workers/me` so 401/426/probation still work (`TestReHelloOnModelChange`, `TestNoModelAtStartWaits`, `TestNoModelStillLearnsUpgradeRequired`).*
+- [ ] While a worker has no model it stays listed as online for `OnlineTTL` with its last models (no "goodbye" in the protocol); jobs submitted then wait until their deadline. → verify: decide whether hello may carry an empty model list, then test.
 - [ ] `setup` end-to-end on a machine without Ollama (real install). → verify: manual run on a clean VM.
 
 ## Updates / release
@@ -38,12 +40,13 @@ Status: `[ ]` to do · `[~]` partial / investigating · `[x]` done
 - [ ] ops: generate the production minisign key pair, keep the secret key in ops, and set `MINISIGN_SECRET_KEY` / `MINISIGN_PASSWORD` (secrets) and `MINISIGN_PUBLIC_KEY` (variable) on the GitHub repository. → verify: the first tagged release publishes `checksums.txt.minisig` and a released worker updates itself.
 - [ ] First real release: push a tag and check the draft → sign → publish flow (minisign reading the password from stdin in Actions is untested). → verify: release page has all archives, `checksums.txt` and `.minisig`; `minisign -V` passes.
 - [ ] Re-run `update-e2e.sh` on Linux and Windows (only run on macOS/arm64). Windows: rename of the running `.exe` and the `.bad` cleanup are untested. → verify: script passes.
-- [ ] A long-poll aborted by `Drain` may lose a job the server leased in the same instant (it expires at its deadline). → verify: test, or have the server release the lease on disconnect.
+- [x] A long-poll aborted by `Drain` may lose a job the server leased in the same instant (it expires at its deadline). → verify: test, or have the server release the lease on disconnect. *Server requeues at the front (same deadline) when the request context is done or the write/flush fails (`TestAbortedPollRequeuesJob`, `TestReleaseRequeuesAtFront`). A response flushed into a dead TCP connection without an error is still lost — undetectable without an ack.*
 - [ ] macOS: a self-updated binary is not notarized/codesigned by us (Go ad-hoc signs on arm64); check Gatekeeper never blocks a launchd agent after update. → verify: update on a Mac with a real release.
 
 ## Security
 - [x] `Auth` interface (per-worker credential, revocable, only a hash stored) + a simple static-token reference implementation. → verify: tests for missing / wrong / revoked credentials (401).
-- [~] Request body limits and rate limits on worker endpoints. → verify: test. *Body limit (1 MiB, `TestBodyLimit`) done; rate limits not yet.*
+- [x] Request body limits and rate limits on worker endpoints. → verify: test. *Body limit (1 MiB, `TestBodyLimit`). Token buckets per worker / caller principal (default 50/s, burst 100) and per client IP for failed auth (0.5/s, burst 10; checked before the token), 429 + `Retry-After`, `X-Forwarded-For` only from `DUMB_TRUSTED_PROXIES` (`TestWorkerAndCallerRateLimits`, `TestUnauthenticatedLimitedPerIP`, `TestClientIP`, `TestDefaultsDoNotThrottleLongPolling`). Live burst: 112×200 / 38×429.*
+- [ ] Rate-limit state is per process and in memory: several server instances each allow the full rate. → verify: decide when there is more than one instance.
 - [x] A result is accepted only from the worker that holds the lease. → verify: test.
 
 ## Repository

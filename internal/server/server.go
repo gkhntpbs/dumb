@@ -3,9 +3,15 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
+	"net/netip"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -24,6 +30,14 @@ type Config struct {
 	MinWorkerVersion string        // e.g. "0.1.0"
 	MaxWait          time.Duration // cap on GET /v1/jobs/next?wait=; default 25s
 	OnlineTTL        time.Duration // a worker is online this long after its last request; default MaxWait+10s
+	Logger           *slog.Logger  // default: discard. Never receives tokens, prompts or outputs.
+
+	// Rate limits (token buckets, in memory): per worker principal, per caller
+	// principal, and per client IP for requests that fail authentication.
+	WorkerRate, CallerRate, UnauthRate Rate
+	// TrustedProxies are the peers whose X-Forwarded-For is believed when
+	// finding the client IP. Default none: the TCP peer address is used.
+	TrustedProxies []netip.Prefix
 }
 
 type worker struct {
@@ -40,6 +54,13 @@ type Server struct {
 	mux     *http.ServeMux
 	mu      sync.Mutex
 	workers map[string]*worker
+	log     *slog.Logger
+
+	workerLim, callerLim, unauthLim *limiter
+
+	// afterClaim, if set, runs after a job is claimed and before the
+	// assignment is written (a test seam for the aborted long-poll race).
+	afterClaim func(r *http.Request)
 }
 
 func New(cfg Config) (*Server, error) {
@@ -56,7 +77,24 @@ func New(cfg Config) (*Server, error) {
 	if cfg.OnlineTTL <= 0 {
 		cfg.OnlineTTL = cfg.MaxWait + 10*time.Second
 	}
-	s := &Server{cfg: cfg, min: min, q: queue.New(), mux: http.NewServeMux(), workers: map[string]*worker{}}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	cfg.WorkerRate = cfg.WorkerRate.orDefault(DefaultWorkerRate)
+	cfg.CallerRate = cfg.CallerRate.orDefault(DefaultCallerRate)
+	cfg.UnauthRate = cfg.UnauthRate.orDefault(DefaultUnauthRate)
+	s := &Server{cfg: cfg, min: min, q: queue.New(), mux: http.NewServeMux(), workers: map[string]*worker{}, log: cfg.Logger,
+		workerLim: newLimiter(cfg.WorkerRate, time.Now),
+		callerLim: newLimiter(cfg.CallerRate, time.Now),
+		unauthLim: newLimiter(cfg.UnauthRate, time.Now),
+	}
+	s.q.OnExpire = func(jobID, model, workerID string) {
+		if workerID == "" {
+			s.log.Warn("job expired", "job_id", jobID, "model", model, "was", protocol.StateQueued)
+		} else {
+			s.log.Warn("job expired", "job_id", jobID, "model", model, "was", protocol.StateLeased, "worker", workerID)
+		}
+	}
 	s.mux.HandleFunc("POST /v1/workers/hello", s.asWorker(s.hello))
 	s.mux.HandleFunc("GET /v1/workers/me", s.asWorker(s.whoami))
 	s.mux.HandleFunc("GET /v1/jobs/next", s.asWorker(s.claim))
@@ -67,21 +105,98 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
+// RequestIDHeader carries the request id; a sane incoming value is kept,
+// otherwise one is generated. It is echoed on every response.
+const RequestIDHeader = "X-Request-ID"
+
+var saneRequestID = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
+
+type ctxKey struct{}
+
+// reqLog returns the request-scoped logger (with request_id).
+func (s *Server) reqLog(r *http.Request) *slog.Logger {
+	if l, ok := r.Context().Value(ctxKey{}).(*slog.Logger); ok {
+		return l
+	}
+	return s.log
+}
+
+// statusWriter records the status code for the access log.
+type statusWriter struct {
+	http.ResponseWriter
+	code int
+}
+
+func (sw *statusWriter) WriteHeader(code int) {
+	if sw.code == 0 {
+		sw.code = code
+	}
+	sw.ResponseWriter.WriteHeader(code)
+}
+
+func (sw *statusWriter) Write(b []byte) (int, error) {
+	if sw.code == 0 {
+		sw.code = http.StatusOK
+	}
+	return sw.ResponseWriter.Write(b)
+}
+
+func (sw *statusWriter) Unwrap() http.ResponseWriter { return sw.ResponseWriter }
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	id := r.Header.Get(RequestIDHeader)
+	if !saneRequestID.MatchString(id) {
+		b := make([]byte, 8)
+		rand.Read(b)
+		id = hex.EncodeToString(b)
+	}
+	w.Header().Set(RequestIDHeader, id)
+	l := s.log.With("request_id", id)
+	r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, l))
 	r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
-	s.mux.ServeHTTP(w, r)
+	sw := &statusWriter{ResponseWriter: w}
+	s.mux.ServeHTTP(sw, r)
+	// The path, never the query or body; job ids are not secret.
+	l.Debug("request", "method", r.Method, "path", r.URL.Path, "status", sw.code,
+		"duration_ms", time.Since(start).Milliseconds(), "request_bytes", max(r.ContentLength, 0))
 }
 
 type handler func(w http.ResponseWriter, r *http.Request, p auth.Principal)
 
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, role auth.Role) (auth.Principal, bool) {
+	ip := clientIP(r, s.cfg.TrustedProxies)
+	// An IP that keeps failing is refused before its token is even looked at,
+	// so guessing costs the attacker a 429 per try, not a 401.
+	if blocked, after := s.unauthLim.blocked(ip); blocked {
+		s.tooMany(w, r, after, "client_ip", ip, "reason", "failed authentication")
+		return auth.Principal{}, false
+	}
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	p, err := s.cfg.Auth.Authenticate(token)
 	if !ok || err != nil || p.Role != role {
+		s.unauthLim.allow(ip)
+		s.reqLog(r).Warn("unauthorized", "path", r.URL.Path, "client_ip", ip, "role", string(role))
 		writeJSON(w, http.StatusUnauthorized, protocol.Error{Error: "unauthorized"})
 		return p, false
 	}
+	lim := s.workerLim
+	if role == auth.RoleCaller {
+		lim = s.callerLim
+	}
+	if ok, after := lim.allow(p.ID); !ok {
+		s.tooMany(w, r, after, "principal", p.ID, "role", string(role))
+		return p, false
+	}
 	return p, true
+}
+
+// tooMany answers 429 with Retry-After.
+func (s *Server) tooMany(w http.ResponseWriter, r *http.Request, after time.Duration, attrs ...any) {
+	ra := retryAfterSeconds(after)
+	s.reqLog(r).Warn("rate limited", append([]any{"path", r.URL.Path, "retry_after_s", ra}, attrs...)...)
+	w.Header().Set("Retry-After", ra)
+	writeError(w, http.StatusTooManyRequests, "rate limit exceeded; retry after "+ra+"s")
 }
 
 func (s *Server) asWorker(h handler) http.HandlerFunc {
@@ -96,6 +211,7 @@ func (s *Server) asWorker(h handler) http.HandlerFunc {
 			return
 		}
 		if v.Less(s.min) {
+			s.reqLog(r).Info("upgrade required", "worker", p.ID, "worker_version", v.String(), "min_worker_version", s.min.String())
 			writeJSON(w, http.StatusUpgradeRequired, protocol.UpgradeError{
 				Error:            "worker " + v.String() + " is older than the minimum " + s.min.String() + "; update before retrying",
 				MinWorkerVersion: s.min.String(),
@@ -138,6 +254,7 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request, p auth.Principal)
 	}
 	wk.models, wk.capacity, wk.lastSeen = slices.Clone(req.Models), req.Capacity, time.Now()
 	s.mu.Unlock()
+	s.reqLog(r).Info("worker hello", "worker", p.ID, "worker_version", req.WorkerVersion, "models", req.Models, "capacity", req.Capacity)
 	writeJSON(w, http.StatusOK, protocol.HelloResponse{
 		WorkerID:         p.ID,
 		MinWorkerVersion: s.min.String(),
@@ -163,7 +280,7 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal)
 		writeError(w, http.StatusConflict, "send hello first")
 		return
 	}
-	models := wk.models
+	models, capacity := wk.models, wk.capacity
 	wk.polling++
 	wk.lastSeen = time.Now()
 	s.mu.Unlock()
@@ -174,17 +291,36 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal)
 		s.mu.Unlock()
 	}()
 
+	// Beyond its capacity a poll waits, like one with no job: it returns the
+	// moment one of the worker's leases ends and a job is queued, or 204.
 	ctx, cancel := context.WithTimeout(r.Context(), wait)
 	defer cancel()
-	a, err := s.q.Claim(ctx, p.ID, models)
+	a, err := s.q.Claim(ctx, p.ID, models, capacity)
 	switch {
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	case a == nil:
 		w.WriteHeader(http.StatusNoContent)
-	default:
-		writeJSON(w, http.StatusOK, a)
+		return
 	}
+	if s.afterClaim != nil {
+		s.afterClaim(r)
+	}
+	l := s.reqLog(r)
+	// The poll may have been aborted in the instant the job was claimed. Then
+	// nobody would run it until its deadline: put it back at the front.
+	if r.Context().Err() == nil {
+		writeJSON(w, http.StatusOK, a)
+		err = http.NewResponseController(w).Flush()
+	}
+	if err = errors.Join(err, r.Context().Err()); err != nil {
+		requeued := s.q.Release(a.JobID, a.LeaseID)
+		l.Warn("claim not delivered", "job_id", a.JobID, "worker", p.ID, "requeued", requeued, "err", err)
+		return
+	}
+	l.Info("job claimed", "job_id", a.JobID, "worker", p.ID, "model", a.Model,
+		"prompt_bytes", len(a.Prompt), "system_bytes", len(a.System), "lease_expires_at", a.LeaseExpiresAt)
 }
 
 func (s *Server) result(w http.ResponseWriter, r *http.Request, p auth.Principal) {
@@ -201,14 +337,22 @@ func (s *Server) result(w http.ResponseWriter, r *http.Request, p auth.Principal
 		return
 	}
 	s.touch(p.ID)
-	if err := s.q.Complete(r.PathValue("id"), req.LeaseID, p.ID, req.Output, req.Error); err != nil {
+	id := r.PathValue("id")
+	if err := s.q.Complete(id, req.LeaseID, p.ID, req.Output, req.Error); err != nil {
+		s.reqLog(r).Info("result refused", "job_id", id, "worker", p.ID, "err", err)
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	state := protocol.StateDone
+	if req.Error != "" {
+		state = protocol.StateFailed
+	}
+	s.reqLog(r).Info("job result", "job_id", id, "worker", p.ID, "state", state,
+		"output_bytes", len(req.Output), "error_bytes", len(req.Error))
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) submit(w http.ResponseWriter, r *http.Request, _ auth.Principal) {
+func (s *Server) submit(w http.ResponseWriter, r *http.Request, p auth.Principal) {
 	wait, ok := parseWait(w, r, 0)
 	if !ok {
 		return
@@ -229,10 +373,14 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request, _ auth.Principal
 		return
 	}
 	if !slices.Contains(s.Status().Models, req.Model) {
+		s.reqLog(r).Info("no worker for model", "caller", p.ID, "model", req.Model)
 		writeError(w, http.StatusServiceUnavailable, "no online worker serves "+req.Model)
 		return
 	}
-	s.waitAndWrite(w, r, s.q.Submit(req), wait)
+	id := s.q.Submit(req)
+	s.reqLog(r).Info("job submitted", "job_id", id, "caller", p.ID, "model", req.Model,
+		"prompt_bytes", len(req.Prompt), "system_bytes", len(req.System), "deadline_ms", req.DeadlineMS)
+	s.waitAndWrite(w, r, id, wait)
 }
 
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request, _ auth.Principal) {

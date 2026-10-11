@@ -358,12 +358,20 @@ func cmdService(ctx context.Context, c *config, sub string, stdout io.Writer, lo
 		if p := service.Path(sc); p != "" {
 			fmt.Fprintf(stdout, "# %s\n", p)
 		}
+		if sc.System && sc.GOOS == "linux" {
+			fmt.Fprintf(stdout, "# Runs as user %q. Create it first:\n# %s\n", service.DefaultUser,
+				strings.ReplaceAll(service.SystemUserHelp, "\n", "\n# "))
+		}
 		fmt.Fprint(stdout, s)
 		return exitOK
 	case "install", "uninstall":
 		if sub == "install" && (c.server == "" || c.tokenFile == "" || c.models == "") {
 			logger.Print("service install needs -server, -token-file and -models (or DUMB_* env)")
 			return exitUsage
+		}
+		if sub == "install" && sc.System && sc.GOOS == "linux" {
+			logger.Printf("the system unit runs as user %q with the binary directory %s writable; create them first:\n%s",
+				service.DefaultUser, filepath.Dir(bin), service.SystemUserHelp)
 		}
 		f := service.Install
 		if sub == "uninstall" {

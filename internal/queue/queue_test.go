@@ -18,7 +18,7 @@ func claimNow(t *testing.T, q *Queue, worker string) *protocol.Assignment {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	a, err := q.Claim(ctx, worker, models)
+	a, err := q.Claim(ctx, worker, models, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestClaimWakesOnSubmit(t *testing.T) {
 	q := New()
 	got := make(chan time.Time, 1)
 	go func() {
-		q.Claim(context.Background(), "w1", models)
+		q.Claim(context.Background(), "w1", models, 100)
 		got <- time.Now()
 	}()
 	time.Sleep(20 * time.Millisecond) // let the claimer block
@@ -161,5 +161,115 @@ func TestWaitAtDeadlineReportsExpired(t *testing.T) {
 		if err != nil || st.State != protocol.StateExpired {
 			t.Fatalf("got %+v, %v; want expired", st, err)
 		}
+	}
+}
+
+func claimCap(t *testing.T, q *Queue, worker string, capacity int, wait time.Duration) *protocol.Assignment {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	a, err := q.Claim(ctx, worker, models, capacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// TestCapacity: a worker never holds more live leases than its capacity, and a
+// lease frees its slot on complete, fail and expiry.
+func TestCapacity(t *testing.T) {
+	q := New()
+	for range 4 {
+		q.Submit(req(time.Second))
+	}
+	a := claimCap(t, q, "w1", 2, 20*time.Millisecond)
+	b := claimCap(t, q, "w1", 2, 20*time.Millisecond)
+	if a == nil || b == nil || q.Leases("w1") != 2 {
+		t.Fatalf("first two claims: %v %v, leases %d", a, b, q.Leases("w1"))
+	}
+	if got := claimCap(t, q, "w1", 2, 30*time.Millisecond); got != nil {
+		t.Fatalf("third claim beyond capacity 2 got %+v", got)
+	}
+	if got := claimCap(t, q, "w2", 1, 20*time.Millisecond); got == nil {
+		t.Fatal("another worker's capacity is independent")
+	}
+
+	// A claim blocked on capacity proceeds the moment a lease ends (complete).
+	got := make(chan time.Time, 1)
+	go func() {
+		if claimCap(t, q, "w1", 2, time.Second) != nil {
+			got <- time.Now()
+		}
+	}()
+	time.Sleep(20 * time.Millisecond)
+	start := time.Now()
+	if err := q.Complete(a.JobID, a.LeaseID, "w1", "ok", ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case at := <-got:
+		if d := at.Sub(start); d > 50*time.Millisecond {
+			t.Fatalf("capacity wait added %v, want < 50ms", d)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked claim never woke after complete")
+	}
+	// Failing frees a slot too.
+	if err := q.Complete(b.JobID, b.LeaseID, "w1", "", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if q.Leases("w1") != 1 {
+		t.Fatalf("leases after complete+fail: %d, want 1", q.Leases("w1"))
+	}
+}
+
+func TestCapacityFreesOnExpiry(t *testing.T) {
+	q := New()
+	expired := make(chan string, 2)
+	q.OnExpire = func(id, _, w string) { expired <- id + "@" + w }
+	id := q.Submit(req(40 * time.Millisecond))
+	q.Submit(req(time.Second))
+	if a := claimCap(t, q, "w1", 1, 20*time.Millisecond); a == nil || a.JobID != id {
+		t.Fatalf("claim: %+v", a)
+	}
+	// Blocked on capacity until the first lease expires.
+	if a := claimCap(t, q, "w1", 1, time.Second); a == nil {
+		t.Fatal("expired lease never freed its slot")
+	}
+	if got := <-expired; got != id+"@w1" {
+		t.Fatalf("OnExpire: %s, want %s@w1", got, id)
+	}
+}
+
+// TestReleaseRequeuesAtFront: an assignment that could not be delivered goes
+// back to the front of the queue, keeps its deadline and frees the lease.
+func TestReleaseRequeuesAtFront(t *testing.T) {
+	q := New()
+	first := q.Submit(req(time.Second))
+	q.Submit(req(time.Second))
+	a := claimCap(t, q, "w1", 1, 20*time.Millisecond)
+	if a.JobID != first {
+		t.Fatal("FIFO broken")
+	}
+	if !q.Release(a.JobID, a.LeaseID) || q.Leases("w1") != 0 || q.Pending() != 2 {
+		t.Fatalf("release: leases %d pending %d", q.Leases("w1"), q.Pending())
+	}
+	if q.Release(a.JobID, a.LeaseID) {
+		t.Fatal("double release accepted")
+	}
+	if err := q.Complete(a.JobID, a.LeaseID, "w1", "x", ""); err != ErrLease {
+		t.Fatalf("stale lease completed: %v", err)
+	}
+	b := claimCap(t, q, "w2", 1, 20*time.Millisecond)
+	if b == nil || b.JobID != first || b.LeaseID == a.LeaseID || !b.LeaseExpiresAt.Equal(a.LeaseExpiresAt) {
+		t.Fatalf("requeued job: %+v (was %+v)", b, a)
+	}
+	// Past its deadline a job is not requeued.
+	q2 := New()
+	q2.Submit(req(30 * time.Millisecond))
+	c := claimCap(t, q2, "w1", 1, 20*time.Millisecond)
+	time.Sleep(40 * time.Millisecond)
+	if q2.Release(c.JobID, c.LeaseID) || q2.Pending() != 0 {
+		t.Fatal("expired job requeued")
 	}
 }

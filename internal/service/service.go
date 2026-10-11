@@ -18,6 +18,18 @@ import (
 // DefaultLabel names the service on every OS.
 const DefaultLabel = "dumb-worker"
 
+// DefaultUser is the dedicated account a Linux system unit runs as. Create it
+// before installing: see SystemUserHelp.
+const DefaultUser = "dumb"
+
+// SystemUserHelp creates the account and gives it the binary's directory, which
+// self-update must be able to write.
+const SystemUserHelp = `sudo useradd --system --user-group --home-dir /var/lib/dumb-worker --create-home --shell /usr/sbin/nologin dumb
+sudo install -d -o dumb -g dumb -m 0755 /opt/dumb-worker      # binary dir: dumb owns it (self-update)
+sudo install -o dumb -g dumb -m 0755 dumb-worker /opt/dumb-worker/
+sudo install -d -o dumb -g dumb -m 0700 /etc/dumb-worker
+sudo install -o dumb -g dumb -m 0600 token /etc/dumb-worker/token`
+
 // Runner runs one command to completion.
 type Runner interface {
 	Run(ctx context.Context, name string, args ...string) error
@@ -32,6 +44,7 @@ type Config struct {
 	Home   string
 	UID    int
 	System bool   // Linux: a system unit instead of a user unit
+	User   string // Linux system unit: the account it runs as; default DefaultUser
 	Root   string // prefix for absolute system paths (tests); default "/"
 	Runner Runner
 }
@@ -126,7 +139,28 @@ func SystemdUnit(c Config) string {
 		fmt.Fprintf(&b, "Environment=%s\n", systemdQuote(k+"="+c.Env[k]))
 	}
 	// Restart=always covers exit code 4 (restart after an update or rollback).
-	b.WriteString("Restart=always\nRestartSec=5\n\n[Install]\n")
+	b.WriteString("Restart=always\nRestartSec=5\n")
+	if c.System {
+		user := c.User
+		if user == "" {
+			user = DefaultUser
+		}
+		fmt.Fprintf(&b, "User=%s\nGroup=%s\n", user, user)
+		// Hardening. The worker only needs outbound TCP, its token file and
+		// write access to its own directory: self-update renames files next to
+		// the binary (<exe>.new, .prev, .update.json, .skip.json, .bad).
+		b.WriteString("NoNewPrivileges=yes\nProtectSystem=strict\n")
+		// No environment expansion here, so "$" is not escaped; specifiers ("%") are.
+		dir := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%").Replace(filepath.Dir(c.Binary))
+		fmt.Fprintf(&b, "ReadWritePaths=\"%s\"\n", dir)
+		b.WriteString("StateDirectory=dumb-worker\n" +
+			"ProtectHome=read-only\nPrivateTmp=yes\nPrivateDevices=yes\n" +
+			"ProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectKernelLogs=yes\nProtectControlGroups=yes\n" +
+			"ProtectClock=yes\nProtectHostname=yes\nRestrictSUIDSGID=yes\nRestrictRealtime=yes\nRestrictNamespaces=yes\n" +
+			"LockPersonality=yes\nMemoryDenyWriteExecute=yes\nSystemCallArchitectures=native\n" +
+			"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\nCapabilityBoundingSet=\nAmbientCapabilities=\nUMask=0077\n")
+	}
+	b.WriteString("\n[Install]\n")
 	if c.System {
 		b.WriteString("WantedBy=multi-user.target\n")
 	} else {

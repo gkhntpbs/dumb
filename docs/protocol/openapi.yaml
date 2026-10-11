@@ -22,6 +22,23 @@ info:
 
     A job's lease ends at the job's deadline. A job whose lease expires is never
     dispatched again: the caller has already given up on it.
+
+
+    **Capacity.** A worker never holds more live leases than the `capacity` of its
+    last hello. A lease ends when its result is posted (done or failed) or when it
+    expires.
+
+
+    **Rate limits.** Every principal (worker or caller) has its own token bucket,
+    and requests that fail authentication are limited per client IP; once a client
+    IP's bucket is empty, its requests are refused before their credential is
+    checked. Exceeding a limit returns `429` with `Retry-After` (seconds). The
+    defaults are well above normal long-polling.
+
+
+    **Request id.** Every response carries `X-Request-ID`: the request's own value
+    when it is 1-64 characters of `[A-Za-z0-9._:-]`, otherwise one the server
+    generates. Server logs carry the same id.
 servers:
   - url: https://dumb.example.invalid
 security:
@@ -39,6 +56,7 @@ paths:
       summary: Introduce a worker and learn the server's floor.
       parameters:
         - $ref: "#/components/parameters/WorkerVersion"
+        - $ref: "#/components/parameters/RequestID"
       requestBody:
         required: true
         content:
@@ -52,6 +70,7 @@ paths:
               schema: { $ref: "#/components/schemas/HelloResponse" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "426": { $ref: "#/components/responses/UpgradeRequired" }
   /v1/workers/me:
     get:
@@ -63,6 +82,7 @@ paths:
         verify that the credential is accepted and the version is not too old.
       parameters:
         - $ref: "#/components/parameters/WorkerVersion"
+        - $ref: "#/components/parameters/RequestID"
       responses:
         "200":
           description: The credential is valid and the version is accepted.
@@ -71,6 +91,7 @@ paths:
               schema: { $ref: "#/components/schemas/WhoAmI" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "426": { $ref: "#/components/responses/UpgradeRequired" }
   /v1/jobs/next:
     get:
@@ -80,8 +101,21 @@ paths:
       description: >
         Returns the moment a matching job is queued. The worker must have sent
         hello first; only jobs for the models it announced are handed out.
+
+
+        A poll beyond the worker's capacity (it already holds `capacity` live
+        leases) is not refused: it waits like a poll with no job, and returns a
+        job the moment one of those leases ends, or `204` when `wait` runs out.
+        Waiting adds no latency and needs no retry, where a refusal would make
+        the worker sleep and miss the moment a slot frees.
+
+
+        If the poll is aborted in the instant a job is claimed for it (the
+        connection closed, the response could not be written), the job goes back
+        to the front of the queue with its original deadline.
       parameters:
         - $ref: "#/components/parameters/WorkerVersion"
+        - $ref: "#/components/parameters/RequestID"
         - name: wait
           in: query
           description: Go duration (e.g. `25s`). Capped at the server's `max_wait`.
@@ -93,9 +127,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Assignment" }
         "204":
-          description: No job arrived within `wait`.
+          description: No job arrived within `wait` (or the worker stayed at capacity).
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "409":
           description: The worker has not sent hello.
           content:
@@ -109,6 +144,7 @@ paths:
       summary: Post the result of a leased job.
       parameters:
         - $ref: "#/components/parameters/WorkerVersion"
+        - $ref: "#/components/parameters/RequestID"
         - $ref: "#/components/parameters/JobID"
       requestBody:
         required: true
@@ -120,6 +156,7 @@ paths:
           description: Result accepted.
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "409":
           description: The lease has expired, is unknown, or belongs to another worker.
           content:
@@ -132,6 +169,7 @@ paths:
       operationId: submitJob
       summary: Submit a job, optionally waiting for its result.
       parameters:
+        - $ref: "#/components/parameters/RequestID"
         - name: wait
           in: query
           description: >
@@ -156,6 +194,7 @@ paths:
               schema: { $ref: "#/components/schemas/JobStatus" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "410":
           description: The deadline passed without a result.
           content:
@@ -172,6 +211,7 @@ paths:
       operationId: getJob
       summary: Wait for a job's result.
       parameters:
+        - $ref: "#/components/parameters/RequestID"
         - $ref: "#/components/parameters/JobID"
         - name: wait
           in: query
@@ -190,6 +230,7 @@ paths:
               schema: { $ref: "#/components/schemas/JobStatus" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
         "404":
           description: Unknown job.
           content:
@@ -205,6 +246,8 @@ paths:
       tags: [caller]
       operationId: getStatus
       summary: Is anyone online?
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
       responses:
         "200":
           description: Current worker availability.
@@ -212,6 +255,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Status" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
 components:
   securitySchemes:
     bearer:
@@ -227,6 +271,15 @@ components:
       required: true
       description: The worker's semantic version, e.g. `1.4.2`.
       schema: { type: string, pattern: '^v?\d+\.\d+\.\d+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' }
+    RequestID:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: >
+        Optional id to trace the request by. Kept when it matches the pattern,
+        otherwise replaced by a generated one; echoed in the `X-Request-ID`
+        response header either way.
+      schema: { type: string, pattern: '^[A-Za-z0-9._:-]{1,64}$' }
     JobID:
       name: id
       in: path
@@ -240,6 +293,17 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     Unauthorized:
       description: Missing, wrong or revoked credential, or the wrong role.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooManyRequests:
+      description: >
+        A rate limit was exceeded: this principal's, or this client IP's after
+        failed authentications. Retry after `Retry-After` seconds.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying (at least 1).
+          schema: { type: integer, minimum: 1 }
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

@@ -2,8 +2,10 @@
 
 DUMB (Distributed User-owned Model Backend): the protocol, the server (`cmd/dumb-server`), the
 worker (`cmd/dumb-worker`) and the `Auth` interface, in Go. **Status:** protocol v1 is defined; the server
-has an in-memory queue with leases, long-poll and caller endpoints, and a static-token `Auth`.
-The worker runs the agent loop (hello, long-poll, generate on the local Ollama), has `doctor`,
+has an in-memory queue with leases (capacity enforced), long-poll and caller endpoints, a static-token
+`Auth`, per-principal / per-IP rate limits and `log/slog` logging with request ids.
+The worker runs the agent loop (hello with the configured models Ollama has, re-checked every
+minute; long-poll; generate on the local Ollama), has `doctor`,
 `setup` and `service` commands, and updates itself from signed GitHub Releases (minisign,
 atomic swap, probation + rollback, `stable` / `beta` channels). Release pipeline: goreleaser +
 GitHub Actions, not yet run for real. Next: see `TODO.md`.
@@ -18,12 +20,12 @@ GitHub Actions, not yet run for real. Next: see `TODO.md`.
 | `cmd/dumb-worker/` | Background worker: manages the local Ollama, self-updates | **ACTIVE** |
 | `internal/protocol/` | Wire types — the authority is `docs/protocol/openapi.yaml` | **ACTIVE** |
 | `internal/queue/` | In-memory job queue with leases | **ACTIVE** |
-| `internal/server/` | HTTP handlers for the protocol | **ACTIVE** |
+| `internal/server/` | HTTP handlers for the protocol, rate limits (`ratelimit.go`), request-id logging | **ACTIVE** |
 | `internal/auth/` | `Authenticator` interface + `StaticTokens` reference (hash-only, revocable) | **ACTIVE** |
 | `internal/ollama/` | Loopback-only Ollama API client + detect / install / start (injectable seams) | **ACTIVE** |
 | `internal/worker/` | Agent loop: hello, long-poll, run job, post result | **ACTIVE** |
 | `internal/doctor/` | Readiness checks behind `dumb-worker doctor` | **ACTIVE** |
-| `internal/service/` | launchd / systemd / Windows service definitions and install | **ACTIVE** |
+| `internal/service/` | launchd / systemd (hardened system unit as `User=dumb`) / Windows service definitions and install — see `docs/service.md` | **ACTIVE** |
 | `internal/update/` | Self-updater: GitHub releases, minisign verification, atomic swap, probation / rollback. Worker only — the server must not import it | **ACTIVE** |
 | `internal/update/updatetest/`, `internal/update/e2e/fakegh/` | Throwaway minisign keys/signatures and a fake GitHub Releases server for tests | test tooling |
 | `.goreleaser.yaml`, `.github/workflows/` | Release build (`release.yaml`, on `v*` tags) and CI (`ci.yaml`) | **ACTIVE** |

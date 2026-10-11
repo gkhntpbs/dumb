@@ -1,3 +1,7 @@
 # docs
 
 Protocol and design docs (public, English).
+
+- `protocol/openapi.yaml` — the protocol authority.
+- `release.md` — release pipeline, signed self-update, probation and rollback.
+- `service.md` — running the worker as a service; the hardened Linux system unit.
