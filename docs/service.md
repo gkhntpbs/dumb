@@ -11,6 +11,62 @@ anything.
 | Linux, `-system` | systemd system unit (`/etc/systemd/system/dumb-worker.service`) | the dedicated `dumb` account |
 | Windows | `sc.exe` service | LocalSystem (no SCM handling yet, see `TODO.md`) |
 
+On macOS, `-log-dir` moves `dumb-worker.log` out of `~/Library/Logs`.
+
+## macOS launchd user agent
+
+Verified on a real Mac (Apple M4, macOS 27.0.1) on 2026-10-12 with
+`QA_LAUNCHD=1 ./qa-automation/scripts/launchd-e2e.sh`, which installs the agent
+from a temp dir and removes it again:
+
+| Check | Result |
+|---|---|
+| `service install` → `launchctl print gui/<uid>/dumb-worker` | `state = running`, a pid, `runs = 1`; `plutil -lint` OK |
+| caller job | served by the launchd-run worker (its job id in the agent's log) |
+| `kill -9` | launchd starts a new pid (`last terminating signal = Killed: 9`, `runs = 2`), which serves again |
+| 426 → self-update → exit 4 | `last exit code = 4`, `runs = 3`, 0.2.0 says hello and commits, serves again. The restart came ~9 s after the exit: `ThrottleInterval` 10 s counts from the process start, and the process had run only a few seconds |
+| Gatekeeper | the binary written by the updater has no `com.apple.quarantine` (only `com.apple.provenance`), is ad-hoc linker-signed, and launchd runs it. `spctl --assess` says `rejected`, as for any un-notarized binary: Gatekeeper only assesses quarantined files at launch, and the updater downloads with Go's HTTP client, which sets no quarantine |
+| `service uninstall` | `launchctl print` → `Could not find service`, plist gone, the worker said goodbye (status: nobody online) |
+
+**Background Task Management.** macOS registers every agent in
+`~/Library/LaunchAgents` as a background item: installing shows a "Background
+Items Added" notification, and the user can switch `dumb-worker` off in
+`System Settings > General > Login Items & Extensions` (then launchd will not
+start it). After `service uninstall` the BTM record (`sfltool dumpbtm`, type
+"legacy agent", name `dumb-worker`) was still listed, pointing at the deleted
+plist; nothing runs from it. macOS has no per-item removal, only the global
+`sfltool resetbtm`, which resets every app's background items — do not use it
+for this.
+
+### How to verify after a reboot
+
+Not testable by an agent; to be done by hand once:
+
+1. From `core/`, build into a directory that survives a reboot (not `$TMPDIR`),
+   with a fixed token pair (as `scripts/dev.sh` does, but kept):
+   ```bash
+   D=~/dumb-reboot-test; mkdir -p $D
+   go build -o $D/dumb-server ./cmd/dumb-server
+   go build -ldflags "-X main.version=0.0.1-dev" -o $D/dumb-worker ./cmd/dumb-worker
+   W=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'); C=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+   (umask 077; printf %s "$W" > $D/token; echo "$C" > $D/caller-token)
+   { echo "w1 worker $(printf %s "$W" | shasum -a 256 | cut -d' ' -f1)"; echo "app caller $(printf %s "$C" | shasum -a 256 | cut -d' ' -f1)"; } > $D/tokens
+   DUMB_ADDR=127.0.0.1:18080 DUMB_TOKENS_FILE=$D/tokens $D/dumb-server &   # start this again after the reboot
+   cd $D
+   ```
+2. `./dumb-worker service install -server http://127.0.0.1:18080 -token-file ~/dumb-reboot-test/token -models smollm2:135m -log-dir ~/dumb-reboot-test`
+3. Check `launchctl print gui/$(id -u)/dumb-worker | grep -E 'state|pid'` → running.
+4. Reboot and log in (a user agent starts at login, not at boot).
+5. Without doing anything else: `launchctl print gui/$(id -u)/dumb-worker | grep -E 'state|pid|runs'`
+   must show `state = running` with a new pid, and `~/dumb-reboot-test/dumb-worker.log`
+   a fresh `hello:` line once the server is up (start it as in step 1); submit a job
+   with `$D/caller-token` and see it served.
+6. Also check `System Settings > General > Login Items & Extensions` lists
+   `dumb-worker` as allowed, and `sfltool dumpbtm | grep -A8 'Name: dumb-worker'`.
+7. Clean up: `./dumb-worker service uninstall`, stop the server, `rm -rf ~/dumb-reboot-test`.
+   Afterwards (and after one more login) note whether the BTM record from step 6
+   disappeared on its own.
+
 ## Linux system unit
 
 The system unit runs as `User=dumb` / `Group=dumb`, never as root. Create the
@@ -49,6 +105,15 @@ self-update under the unit); the generated unit is covered by
 
 The worker announces only the configured models (`-models`) that Ollama actually
 has, re-checked every minute. When that set changes it says hello again. When
-none is present it stops claiming jobs, logs why, and only checks in with
+none is present it says goodbye (so callers get `503` at once instead of
+waiting), stops claiming jobs, logs why, and only checks in with
 `GET /v1/workers/me` (so a revoked credential or a required upgrade is still
-noticed) until a model appears.
+noticed) until a model appears; then it says hello again.
+
+## Shutdown
+
+On SIGTERM / Ctrl-C (also `launchctl bootout`, `systemctl stop`), a drain before
+an update restart, and a probation rollback, the worker finishes or fails its
+jobs in flight, then calls `POST /v1/workers/goodbye`: the server stops counting
+it online at once. Not after `401` / `426` (the server would refuse it too) or
+`kill -9` (then the server notices after its online timeout, as before).

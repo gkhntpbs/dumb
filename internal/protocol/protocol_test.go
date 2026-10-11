@@ -71,7 +71,7 @@ func TestTypesMatchSpec(t *testing.T) {
 	types := map[string]any{
 		"Error": Error{}, "UpgradeError": UpgradeError{}, "HelloRequest": HelloRequest{},
 		"HelloResponse": HelloResponse{}, "WhoAmI": WhoAmI{}, "SubmitRequest": SubmitRequest{}, "Assignment": Assignment{},
-		"ResultRequest": ResultRequest{}, "JobStatus": JobStatus{}, "Status": Status{},
+		"ResultRequest": ResultRequest{}, "AckRequest": AckRequest{}, "JobStatus": JobStatus{}, "Status": Status{},
 	}
 	spec := specSchemas(t)
 	for name, props := range spec {

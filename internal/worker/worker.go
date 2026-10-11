@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gkhntpbs/dumb/internal/ollama"
@@ -276,6 +277,7 @@ func (w *Worker) watchModels(ctx context.Context) error {
 		if len(m) == 0 {
 			w.logNoModel(have)
 			w.setModels(nil)
+			w.goodbye(ctx) // nothing to serve: callers should not wait for us
 			continue
 		}
 		w.log.Printf("models present changed from %v to %v; saying hello again", cur, m)
@@ -374,7 +376,7 @@ func (w *Worker) sleep(ctx context.Context, attempt int) error {
 func (w *Worker) hello(ctx context.Context, models []string) error {
 	req := protocol.HelloRequest{
 		WorkerVersion: w.cfg.Version, ProtocolVersion: protocol.Version,
-		Models: models, Capacity: w.cfg.Capacity,
+		Models: models, Capacity: w.cfg.Capacity, Features: []string{protocol.FeatureAck},
 	}
 	for attempt := 0; ; attempt++ {
 		var res protocol.HelloResponse
@@ -407,6 +409,24 @@ func (w *Worker) hello(ctx context.Context, models []string) error {
 		}
 	}
 }
+
+// goodbye tells the server this worker is leaving the pool, so callers get
+// 503 at once instead of waiting for the online timeout. Best effort: one
+// short attempt that works even while ctx is ending.
+func (w *Worker) goodbye(ctx context.Context) {
+	gctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), goodbyeTimeout)
+	defer cancel()
+	code, err := w.call(gctx, http.MethodPost, "/v1/workers/goodbye", "", nil, nil)
+	switch {
+	case err != nil:
+		w.log.Printf("goodbye failed: %v", err)
+	case code != http.StatusNoContent:
+		w.log.Printf("goodbye: unexpected status %d", code)
+	}
+}
+
+// goodbyeTimeout bounds the goodbye request: shutdown must not hang on it.
+const goodbyeTimeout = 3 * time.Second
 
 // Drain stops claiming new jobs; Run returns nil once the jobs in flight have
 // finished (each is bounded by its lease deadline). Safe to call at any time.
@@ -457,7 +477,13 @@ func (w *Worker) Run(ctx context.Context) error {
 		})
 	}
 	wg.Wait()
-	return context.Cause(ctx)
+	err := context.Cause(ctx)
+	// Leaving for any reason but a refused credential or version (where the
+	// server would refuse goodbye too): stop counting as online now.
+	if cur, _ := w.current(); len(cur) > 0 && !fatal(err) {
+		w.goodbye(ctx)
+	}
+	return err
 }
 
 func (w *Worker) loop(ctx context.Context) error {
@@ -534,11 +560,53 @@ func isClosed(c <-chan struct{}) bool {
 	}
 }
 
+// ack acknowledges the assignment and reports whether the server refused it
+// (409: the lease is gone). A failed request is logged, not retried: the
+// result, if accepted, counts as an ack.
+func (w *Worker) ack(ctx context.Context, a protocol.Assignment) bool {
+	actx, cancel := context.WithTimeout(ctx, ackTimeout)
+	defer cancel()
+	code, err := w.call(actx, http.MethodPost, "/v1/jobs/"+a.JobID+"/ack", "", protocol.AckRequest{LeaseID: a.LeaseID}, nil)
+	switch {
+	case err != nil:
+		if ctx.Err() == nil {
+			w.log.Printf("job %s: ack failed: %v", a.JobID, err)
+		}
+	case code == http.StatusConflict:
+		return true
+	case code != http.StatusNoContent:
+		w.log.Printf("job %s: ack: unexpected status %d", a.JobID, code)
+	}
+	return false
+}
+
+// ackTimeout bounds the ack request.
+const ackTimeout = 5 * time.Second
+
 func (w *Worker) runJob(ctx context.Context, a protocol.Assignment) {
 	start := time.Now()
 	jctx, cancel := context.WithDeadline(ctx, a.LeaseExpiresAt)
+	// Ack in parallel with the generation, so it adds no latency. A refused
+	// ack means the lease was revoked (it arrived too late): stop the job.
+	var revoked atomic.Bool
+	acked := make(chan struct{})
+	go func() {
+		defer close(acked)
+		if w.ack(jctx, a) {
+			revoked.Store(true)
+			cancel()
+		}
+	}()
 	out, err := w.gen.Generate(jctx, ollama.GenerateRequest{Model: a.Model, Prompt: a.Prompt, System: a.System, Format: a.Format})
+	if err == nil {
+		<-acked // a result must not race ahead of a refused ack
+	}
 	cancel()
+	<-acked
+	if revoked.Load() {
+		w.log.Printf("job %s: lease revoked before the ack arrived; dropped", a.JobID)
+		return
+	}
 	res := protocol.ResultRequest{LeaseID: a.LeaseID, Output: out}
 	if err != nil {
 		res = protocol.ResultRequest{LeaseID: a.LeaseID, Error: err.Error()}

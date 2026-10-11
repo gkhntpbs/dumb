@@ -82,6 +82,7 @@ func main() {
 type config struct {
 	server, tokenFile, models, ollamaURL string
 	channel, updateURL                   string
+	logDir                               string // service: macOS log directory
 	capacity                             int
 	system                               bool // service: Linux system unit
 }
@@ -120,6 +121,7 @@ func parseFlags(name string, args []string, stderr io.Writer) (*config, []string
 	fs.StringVar(&c.updateURL, "update-url", env("DUMB_UPDATE_URL", update.DefaultBaseURL), "GitHub API base URL for releases (env DUMB_UPDATE_URL)")
 	if name == "service" {
 		fs.BoolVar(&c.system, "system", false, "Linux: install a system unit instead of a user unit")
+		fs.StringVar(&c.logDir, "log-dir", "", "macOS: directory for dumb-worker.log (default ~/Library/Logs)")
 	}
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, err
@@ -334,6 +336,12 @@ func cmdService(ctx context.Context, c *config, sub string, stdout io.Writer, lo
 		}
 		envs["DUMB_TOKEN_FILE"] = abs
 	}
+	if c.logDir != "" {
+		if c.logDir, err = filepath.Abs(c.logDir); err != nil {
+			logger.Print(err)
+			return exitError
+		}
+	}
 	if c.ollamaURL != ollama.DefaultURL {
 		envs["DUMB_OLLAMA"] = c.ollamaURL
 	}
@@ -346,7 +354,7 @@ func cmdService(ctx context.Context, c *config, sub string, stdout io.Writer, lo
 	home, _ := os.UserHomeDir()
 	sc := service.Config{
 		GOOS: runtime.GOOS, Binary: bin, Env: envs, Home: home, UID: os.Getuid(),
-		System: c.system, Runner: ollama.ExecRunner{},
+		System: c.system, LogDir: c.logDir, Runner: ollama.ExecRunner{},
 	}
 	switch sub {
 	case "print":

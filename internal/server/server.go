@@ -25,12 +25,20 @@ import (
 // MaxBodyBytes bounds every request body.
 const MaxBodyBytes = 1 << 20
 
+// DefaultAckWindow is Config.AckWindow's default.
+const DefaultAckWindow = 2 * time.Second
+
 type Config struct {
 	Auth             auth.Authenticator
 	MinWorkerVersion string        // e.g. "0.1.0"
 	MaxWait          time.Duration // cap on GET /v1/jobs/next?wait=; default 25s
 	OnlineTTL        time.Duration // a worker is online this long after its last request; default MaxWait+10s
 	Logger           *slog.Logger  // default: discard. Never receives tokens, prompts or outputs.
+	// AckWindow is how long a worker that announced the "ack" feature has to
+	// acknowledge an assignment before its lease is revoked and the job goes
+	// back to the front of the queue. Never beyond the job's deadline.
+	// Default DefaultAckWindow.
+	AckWindow time.Duration
 
 	// Rate limits (token buckets, in memory): per worker principal, per caller
 	// principal, and per client IP for requests that fail authentication.
@@ -45,6 +53,8 @@ type worker struct {
 	capacity int
 	lastSeen time.Time
 	polling  int
+	ack      bool          // announced protocol.FeatureAck
+	gone     chan struct{} // closed by goodbye: aborts this worker's polls
 }
 
 type Server struct {
@@ -77,6 +87,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.OnlineTTL <= 0 {
 		cfg.OnlineTTL = cfg.MaxWait + 10*time.Second
 	}
+	if cfg.AckWindow <= 0 {
+		cfg.AckWindow = DefaultAckWindow
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -96,8 +109,10 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 	s.mux.HandleFunc("POST /v1/workers/hello", s.asWorker(s.hello))
+	s.mux.HandleFunc("POST /v1/workers/goodbye", s.asWorker(s.goodbye))
 	s.mux.HandleFunc("GET /v1/workers/me", s.asWorker(s.whoami))
 	s.mux.HandleFunc("GET /v1/jobs/next", s.asWorker(s.claim))
+	s.mux.HandleFunc("POST /v1/jobs/{id}/ack", s.asWorker(s.ack))
 	s.mux.HandleFunc("POST /v1/jobs/{id}/result", s.asWorker(s.result))
 	s.mux.HandleFunc("POST /v1/jobs", s.asCaller(s.submit))
 	s.mux.HandleFunc("GET /v1/jobs/{id}", s.asCaller(s.getJob))
@@ -249,17 +264,36 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request, p auth.Principal)
 	s.mu.Lock()
 	wk := s.workers[p.ID]
 	if wk == nil {
-		wk = &worker{}
+		wk = &worker{gone: make(chan struct{})}
 		s.workers[p.ID] = wk
 	}
 	wk.models, wk.capacity, wk.lastSeen = slices.Clone(req.Models), req.Capacity, time.Now()
+	wk.ack = slices.Contains(req.Features, protocol.FeatureAck)
 	s.mu.Unlock()
-	s.reqLog(r).Info("worker hello", "worker", p.ID, "worker_version", req.WorkerVersion, "models", req.Models, "capacity", req.Capacity)
+	s.reqLog(r).Info("worker hello", "worker", p.ID, "worker_version", req.WorkerVersion, "models", req.Models,
+		"capacity", req.Capacity, "features", req.Features)
 	writeJSON(w, http.StatusOK, protocol.HelloResponse{
 		WorkerID:         p.ID,
 		MinWorkerVersion: s.min.String(),
 		MaxWait:          s.cfg.MaxWait.String(),
 	})
+}
+
+// goodbye takes the worker offline at once: it is no longer counted by
+// Status (callers get 503 instead of waiting for OnlineTTL) and its polls in
+// flight end. Unknown workers get 204 too, so a retry is harmless.
+func (s *Server) goodbye(w http.ResponseWriter, r *http.Request, p auth.Principal) {
+	s.mu.Lock()
+	wk := s.workers[p.ID]
+	if wk != nil {
+		delete(s.workers, p.ID)
+		close(wk.gone)
+	}
+	s.mu.Unlock()
+	if wk != nil {
+		s.reqLog(r).Info("worker goodbye", "worker", p.ID, "leases", s.q.Leases(p.ID))
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // whoami confirms the credential and version; unlike hello it changes nothing.
@@ -280,7 +314,7 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal)
 		writeError(w, http.StatusConflict, "send hello first")
 		return
 	}
-	models, capacity := wk.models, wk.capacity
+	models, capacity, needAck := wk.models, wk.capacity, wk.ack
 	wk.polling++
 	wk.lastSeen = time.Now()
 	s.mu.Unlock()
@@ -295,6 +329,13 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal)
 	// moment one of the worker's leases ends and a job is queued, or 204.
 	ctx, cancel := context.WithTimeout(r.Context(), wait)
 	defer cancel()
+	go func() { // goodbye ends the poll
+		select {
+		case <-wk.gone:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	a, err := s.q.Claim(ctx, p.ID, models, capacity)
 	switch {
 	case err != nil:
@@ -319,8 +360,40 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal)
 		l.Warn("claim not delivered", "job_id", a.JobID, "worker", p.ID, "requeued", requeued, "err", err)
 		return
 	}
+	if needAck {
+		// A response flushed into a dead connection reports no error. A worker
+		// that acks proves it got the job; without the ack in time, the job
+		// goes back to the front for another worker.
+		window := min(s.cfg.AckWindow, time.Until(a.LeaseExpiresAt))
+		jobID, leaseID, log := a.JobID, a.LeaseID, s.log
+		time.AfterFunc(window, func() {
+			if s.q.RevokeUnacked(jobID, leaseID) {
+				log.Warn("lease revoked: no ack", "job_id", jobID, "worker", p.ID, "ack_window", window.String())
+			}
+		})
+	}
 	l.Info("job claimed", "job_id", a.JobID, "worker", p.ID, "model", a.Model,
-		"prompt_bytes", len(a.Prompt), "system_bytes", len(a.System), "lease_expires_at", a.LeaseExpiresAt)
+		"prompt_bytes", len(a.Prompt), "system_bytes", len(a.System), "lease_expires_at", a.LeaseExpiresAt, "ack", needAck)
+}
+
+func (s *Server) ack(w http.ResponseWriter, r *http.Request, p auth.Principal) {
+	var req protocol.AckRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.LeaseID == "" {
+		writeError(w, http.StatusBadRequest, "lease_id is required")
+		return
+	}
+	s.touch(p.ID)
+	id := r.PathValue("id")
+	if err := s.q.Ack(id, req.LeaseID, p.ID); err != nil {
+		s.reqLog(r).Info("ack refused", "job_id", id, "worker", p.ID, "err", err)
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	s.reqLog(r).Debug("job acked", "job_id", id, "worker", p.ID)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) result(w http.ResponseWriter, r *http.Request, p auth.Principal) {
@@ -428,7 +501,7 @@ func (s *Server) Status() protocol.Status {
 	st := protocol.Status{Models: []string{}}
 	now := time.Now()
 	for _, wk := range s.workers {
-		if wk.polling == 0 && now.Sub(wk.lastSeen) > s.cfg.OnlineTTL {
+		if len(wk.models) == 0 || wk.polling == 0 && now.Sub(wk.lastSeen) > s.cfg.OnlineTTL {
 			continue
 		}
 		st.WorkersOnline++

@@ -158,18 +158,17 @@ func TestReHelloOnModelChange(t *testing.T) {
 	eventually(t, "polls to stop", func() bool {
 		return polling.Load() == 0 && strings.Contains(logs.String(), "no configured model is present")
 	})
+	// It said goodbye: callers get 503 at once instead of waiting.
+	eventually(t, "worker offline", func() bool { return len(status()) == 0 })
 	code, b := caller(t, "POST", ts.URL+"/v1/jobs?wait=200ms", protocol.SubmitRequest{Model: model, Prompt: "hi", DeadlineMS: 5000})
-	var st protocol.JobStatus
-	json.Unmarshal(b, &st)
-	if code != http.StatusAccepted || st.State != protocol.StateQueued {
-		t.Fatalf("job claimed while no model was present: %d %s", code, b)
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("submit while no model was present: %d %s, want 503", code, b)
 	}
 
-	// The model comes back: hello again, and the queued job runs.
+	// The model comes back: hello again, and jobs run.
 	fo.set(model)
-	code, b = caller(t, "GET", ts.URL+"/v1/jobs/"+st.JobID+"?wait=3s", nil)
-	if code != 200 || !strings.Contains(string(b), `"done"`) {
-		t.Fatalf("after the model came back: %d %s", code, b)
+	if code, st := submit(t, ts.URL, model); code != 200 || st.State != protocol.StateDone {
+		t.Fatalf("after the model came back: %d %+v", code, st)
 	}
 	if hellos.Load() != 3 || !slices.Equal(status(), []string{model}) {
 		t.Fatalf("hellos %d, status %v", hellos.Load(), status())

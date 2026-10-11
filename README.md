@@ -18,7 +18,19 @@ Status: early design. Nothing here is usable yet.
 cmd/dumb-server   job queue + long-poll endpoints
 cmd/dumb-worker   background worker
 internal/protocol wire types (authority: docs/protocol/openapi.yaml)
+scripts/dev.sh    local server + worker for development
 ```
+
+## Local development
+
+```bash
+./scripts/dev.sh
+```
+
+Builds `dumb-server` and `dumb-worker`, starts both on `127.0.0.1` against your local
+Ollama (model `smollm2:135m` by default, `DEV_MODELS` to change), with throwaway tokens
+in a temp dir. It prints the caller token and an example `curl`; Ctrl-C stops everything
+and deletes the temp dir.
 
 ## Security
 

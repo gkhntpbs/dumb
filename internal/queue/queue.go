@@ -36,6 +36,7 @@ type job struct {
 	workerID string
 	output   string
 	err      string
+	acked    bool          // the lease holder acknowledged the assignment
 	done     chan struct{} // closed when state becomes done, failed or expired
 
 	expireUnreported bool // expired, OnExpire not called yet
@@ -106,6 +107,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, models []string, cap
 			j.state = protocol.StateLeased
 			j.leaseID = newID()
 			j.workerID = workerID
+			j.acked = false
 			q.leases[workerID]++
 			a := &protocol.Assignment{
 				JobID:          j.id,
@@ -148,6 +150,31 @@ func (q *Queue) Complete(jobID, leaseID, workerID, output, errMsg string) error 
 	return nil
 }
 
+// Ack records that the worker holding the live lease received the
+// assignment. Acking twice is fine; any other lease gets ErrLease.
+func (q *Queue) Ack(jobID, leaseID, workerID string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	j, ok := q.jobs[jobID]
+	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID {
+		return ErrLease
+	}
+	j.acked = true
+	return nil
+}
+
+// RevokeUnacked is Release for a lease that was never acknowledged: it
+// requeues the job at the front unless Ack (or a result) came first.
+func (q *Queue) RevokeUnacked(jobID, leaseID string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	j, ok := q.jobs[jobID]
+	if !ok || j.acked {
+		return false
+	}
+	return q.releaseLocked(j, leaseID)
+}
+
 // Release puts a leased job back at the front of the queue, as if it had never
 // been claimed. The server calls it when the assignment could not be delivered
 // (the long-poll was aborted in the instant the job was claimed). It reports
@@ -156,7 +183,11 @@ func (q *Queue) Release(jobID, leaseID string) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	j, ok := q.jobs[jobID]
-	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || !time.Now().Before(j.deadline) {
+	return ok && q.releaseLocked(j, leaseID)
+}
+
+func (q *Queue) releaseLocked(j *job, leaseID string) bool {
+	if j.state != protocol.StateLeased || j.leaseID != leaseID || !time.Now().Before(j.deadline) {
 		return false
 	}
 	q.endLeaseLocked(j)

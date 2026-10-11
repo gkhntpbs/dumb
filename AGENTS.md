@@ -3,7 +3,9 @@
 DUMB (Distributed User-owned Model Backend): the protocol, the server (`cmd/dumb-server`), the
 worker (`cmd/dumb-worker`) and the `Auth` interface, in Go. **Status:** protocol v1 is defined; the server
 has an in-memory queue with leases (capacity enforced), long-poll and caller endpoints, a static-token
-`Auth`, per-principal / per-IP rate limits and `log/slog` logging with request ids.
+`Auth`, per-principal / per-IP rate limits, `log/slog` logging with request ids, claim
+acknowledgement (an unacked lease of an `ack`-capable worker is revoked after `DUMB_ACK_WINDOW`,
+default 2s) and worker goodbye (offline at once, callers get the immediate 503).
 The worker runs the agent loop (hello with the configured models Ollama has, re-checked every
 minute; long-poll; generate on the local Ollama), has `doctor`,
 `setup` and `service` commands, and updates itself from signed GitHub Releases (minisign,
@@ -29,7 +31,8 @@ GitHub Actions, not yet run for real. Next: see `TODO.md`.
 | `internal/update/` | Self-updater: GitHub releases, minisign verification, atomic swap, probation / rollback. Worker only — the server must not import it | **ACTIVE** |
 | `internal/update/updatetest/`, `internal/update/e2e/fakegh/` | Throwaway minisign keys/signatures and a fake GitHub Releases server for tests | test tooling |
 | `.goreleaser.yaml`, `.github/workflows/` | Release build (`release.yaml`, on `v*` tags) and CI (`ci.yaml`) | **ACTIVE** |
-| `docs/` | Protocol and design docs | — |
+| `docs/` | Protocol and design docs; `measurements.md` holds dated measurement runs | — |
+| `scripts/` | `dev.sh`: local dumb-server + one worker against the local Ollama | dev tooling |
 | `qa-automation/` | Build gate (unit tests only) | **ACTIVE** — follow `qa-automation/README.md` |
 
 **This repository is public.** Everything written here must be safe with the whole world
@@ -62,11 +65,14 @@ in the private `ops` repository, never here.
 ## Commands
 
 ```bash
-go run ./cmd/dumb-server    # run locally
+./scripts/dev.sh            # dumb-server + one worker on the local Ollama; prints the caller token and a curl; Ctrl-C cleans up
+go run ./cmd/dumb-server    # run the server alone
 go test ./...               # unit tests
 QA_OLLAMA=1 go test -run Integration -v ./internal/ollama   # against a local Ollama
 go build ./...              # build
 ./qa-automation/scripts/update-e2e.sh   # local signed self-update end to end (no GitHub)
+QA_OLLAMA=1 ./qa-automation/scripts/hedge-budget.sh   # caller latency vs a 1.5 s hedge on the real Ollama → docs/measurements.md
+QA_LAUNCHD=1 ./qa-automation/scripts/launchd-e2e.sh   # macOS: real launchd agent install, kill -9, exit-4 update restart, uninstall
 go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean --skip=publish  # dry-run release into dist/
 ```
 

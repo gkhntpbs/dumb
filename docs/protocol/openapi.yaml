@@ -29,6 +29,22 @@ info:
     expires.
 
 
+    **Acknowledgement.** A worker whose hello lists the `ack` feature
+    acknowledges every assignment with `POST /v1/jobs/{id}/ack`. If the ack does
+    not arrive within the server's ack window (default 2s, never beyond the
+    job's deadline) the lease is revoked and the job goes back to the front of
+    the queue for another worker; the old lease then gets `409` on ack and
+    result. This catches an assignment flushed into a dead connection, which
+    the server cannot otherwise see. A worker that does not announce `ack`
+    (older workers) is never subject to the window; posting a result also
+    counts as an ack.
+
+
+    **Goodbye.** A worker leaving gracefully calls `POST /v1/workers/goodbye`;
+    from then on it is not online, so callers get `503` at once instead of
+    after the online timeout.
+
+
     **Rate limits.** Every principal (worker or caller) has its own token bucket,
     and requests that fail authentication are limited per client IP; once a client
     IP's bucket is empty, its requests are refused before their credential is
@@ -68,6 +84,25 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HelloResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "426": { $ref: "#/components/responses/UpgradeRequired" }
+  /v1/workers/goodbye:
+    post:
+      tags: [worker]
+      operationId: workerGoodbye
+      summary: Leave the pool now (graceful shutdown, restart, no model left).
+      description: >
+        The worker stops counting as online immediately and its long-polls in
+        flight end. Leases it still holds are unaffected: their results are
+        still accepted. Saying hello again brings it back. Idempotent.
+      parameters:
+        - $ref: "#/components/parameters/WorkerVersion"
+        - $ref: "#/components/parameters/RequestID"
+      responses:
+        "204":
+          description: The worker is offline.
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
@@ -137,6 +172,38 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "426": { $ref: "#/components/responses/UpgradeRequired" }
+  /v1/jobs/{id}/ack:
+    post:
+      tags: [worker]
+      operationId: ackJob
+      summary: Acknowledge that an assignment arrived.
+      description: >
+        Sent right after `GET /v1/jobs/next` returns a job, by workers whose
+        hello listed the `ack` feature. Without it the lease is revoked when the
+        ack window ends. Acking twice is harmless.
+      parameters:
+        - $ref: "#/components/parameters/WorkerVersion"
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/JobID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AckRequest" }
+      responses:
+        "204":
+          description: Acknowledged; the lease runs until `lease_expires_at`.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "409":
+          description: >
+            The lease was revoked (ack too late), has expired, is unknown, or
+            belongs to another worker. Do not run the job.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "426": { $ref: "#/components/responses/UpgradeRequired" }
   /v1/jobs/{id}/result:
     post:
       tags: [worker]
@@ -158,7 +225,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
         "409":
-          description: The lease has expired, is unknown, or belongs to another worker.
+          description: The lease has expired, was revoked, is unknown, or belongs to another worker.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -338,6 +405,13 @@ components:
           type: integer
           minimum: 1
           description: Jobs this worker can run at the same time.
+        features:
+          type: array
+          items: { type: string }
+          description: >
+            Optional protocol behaviours this worker supports. Known: `ack`
+            (acknowledges assignments, see `POST /v1/jobs/{id}/ack`). Unknown
+            values are ignored.
     HelloResponse:
       type: object
       required: [worker_id, min_worker_version, max_wait]
@@ -380,6 +454,11 @@ components:
         prompt: { type: string }
         system: { type: string }
         format: { type: string }
+    AckRequest:
+      type: object
+      required: [lease_id]
+      properties:
+        lease_id: { type: string }
     ResultRequest:
       type: object
       required: [lease_id]
@@ -402,7 +481,9 @@ components:
       type: object
       required: [workers_online, models]
       properties:
-        workers_online: { type: integer }
+        workers_online:
+          type: integer
+          description: Workers seen recently that announced at least one model and have not said goodbye.
         models:
           type: array
           items: { type: string }

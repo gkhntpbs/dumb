@@ -5,6 +5,7 @@
 //	DUMB_ADDR                listen address (default 127.0.0.1:8080; put TLS in front of it)
 //	DUMB_TOKENS_FILE         token table, one "<id> <worker|caller> <sha256-hex-of-token>" per line
 //	DUMB_MIN_WORKER_VERSION  oldest worker version accepted (default 0.0.0)
+//	DUMB_ACK_WINDOW          time an ack-capable worker has to acknowledge an assignment (default 2s)
 //	DUMB_LOG_LEVEL           debug, info (default), warn or error; logs are JSON on stderr
 //	DUMB_RATE_WORKER         per-worker token bucket "<per-second>,<burst>" (default 50,100; "off" disables)
 //	DUMB_RATE_CALLER         per-caller token bucket (default 50,100)
@@ -49,6 +50,11 @@ func run() error {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	cfg := server.Config{Auth: tokens, MinWorkerVersion: env("DUMB_MIN_WORKER_VERSION", "0.0.0"), Logger: logger}
+	if v := os.Getenv("DUMB_ACK_WINDOW"); v != "" {
+		if cfg.AckWindow, err = time.ParseDuration(v); err != nil || cfg.AckWindow <= 0 {
+			return fmt.Errorf("DUMB_ACK_WINDOW: %q: want a positive Go duration (e.g. 2s)", v)
+		}
+	}
 	for _, r := range []struct {
 		key string
 		dst *server.Rate

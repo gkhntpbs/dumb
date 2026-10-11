@@ -41,6 +41,18 @@ type HelloRequest struct {
 	ProtocolVersion int      `json:"protocol_version"`
 	Models          []string `json:"models"`
 	Capacity        int      `json:"capacity"`
+	// Features lists optional protocol behaviours this worker supports
+	// (FeatureAck). Absent in older workers.
+	Features []string `json:"features,omitempty"`
+}
+
+// FeatureAck: the worker acknowledges every assignment with
+// POST /v1/jobs/{id}/ack, and the server may revoke an unacknowledged lease.
+const FeatureAck = "ack"
+
+// AckRequest acknowledges an assignment.
+type AckRequest struct {
+	LeaseID string `json:"lease_id"`
 }
 
 type HelloResponse struct {

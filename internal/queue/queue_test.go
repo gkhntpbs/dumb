@@ -273,3 +273,44 @@ func TestReleaseRequeuesAtFront(t *testing.T) {
 		t.Fatal("expired job requeued")
 	}
 }
+
+// TestAckBlocksRevoke: an acknowledged lease is never revoked; an
+// unacknowledged one goes back to the front and its old lease is dead.
+func TestAckBlocksRevoke(t *testing.T) {
+	q := New()
+	q.Submit(req(time.Second))
+	a := claimCap(t, q, "w1", 1, 20*time.Millisecond)
+	if err := q.Ack(a.JobID, a.LeaseID, "w2"); err != ErrLease {
+		t.Fatalf("ack by another worker: %v", err)
+	}
+	if err := q.Ack(a.JobID, a.LeaseID, "w1"); err != nil {
+		t.Fatal(err)
+	}
+	if q.RevokeUnacked(a.JobID, a.LeaseID) || q.Leases("w1") != 1 {
+		t.Fatal("acked lease revoked")
+	}
+
+	id := q.Submit(req(time.Second))
+	b := claimCap(t, q, "w2", 1, 20*time.Millisecond)
+	if b.JobID != id {
+		t.Fatal("wrong job")
+	}
+	if !q.RevokeUnacked(b.JobID, b.LeaseID) || q.Leases("w2") != 0 || q.Pending() != 1 {
+		t.Fatalf("unacked lease not revoked: leases %d pending %d", q.Leases("w2"), q.Pending())
+	}
+	if q.Ack(b.JobID, b.LeaseID, "w2") != ErrLease || q.Complete(b.JobID, b.LeaseID, "w2", "x", "") != ErrLease {
+		t.Fatal("revoked lease still usable")
+	}
+	c := claimCap(t, q, "w3", 1, 20*time.Millisecond)
+	if c == nil || c.JobID != id {
+		t.Fatalf("revoked job not claimable again: %+v", c)
+	}
+	// An acked lease that is released (undelivered) does not pass its ack on.
+	if q.Ack(c.JobID, c.LeaseID, "w3") != nil || !q.Release(c.JobID, c.LeaseID) {
+		t.Fatal("ack + release failed")
+	}
+	d := claimCap(t, q, "w4", 1, 20*time.Millisecond)
+	if d == nil || !q.RevokeUnacked(d.JobID, d.LeaseID) {
+		t.Fatal("ack carried over to the next lease")
+	}
+}
