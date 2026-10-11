@@ -37,7 +37,7 @@ func TestSemVer(t *testing.T) {
 func TestTypesMatchSpec(t *testing.T) {
 	types := map[string]any{
 		"Error": Error{}, "UpgradeError": UpgradeError{}, "HelloRequest": HelloRequest{},
-		"HelloResponse": HelloResponse{}, "SubmitRequest": SubmitRequest{}, "Assignment": Assignment{},
+		"HelloResponse": HelloResponse{}, "WhoAmI": WhoAmI{}, "SubmitRequest": SubmitRequest{}, "Assignment": Assignment{},
 		"ResultRequest": ResultRequest{}, "JobStatus": JobStatus{}, "Status": Status{},
 	}
 	spec := specSchemas(t)

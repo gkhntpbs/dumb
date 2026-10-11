@@ -1,0 +1,243 @@
+// Package service generates and installs the OS service that keeps dumb-worker
+// running: a launchd user agent on macOS, a systemd unit on Linux and a Windows
+// service. Every command goes through a Runner so tests never touch the system.
+package service
+
+import (
+	"bytes"
+	"context"
+	"encoding/xml"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+)
+
+// DefaultLabel names the service on every OS.
+const DefaultLabel = "dumb-worker"
+
+// Runner runs one command to completion.
+type Runner interface {
+	Run(ctx context.Context, name string, args ...string) error
+}
+
+type Config struct {
+	GOOS   string
+	Label  string            // default DefaultLabel; launchd label, systemd unit and Windows service name
+	Binary string            // absolute path to dumb-worker
+	Env    map[string]string // configuration passed as environment (DUMB_*)
+	LogDir string            // macOS stdout/stderr logs; default ~/Library/Logs
+	Home   string
+	UID    int
+	System bool   // Linux: a system unit instead of a user unit
+	Root   string // prefix for absolute system paths (tests); default "/"
+	Runner Runner
+}
+
+func (c *Config) label() string {
+	if c.Label == "" {
+		return DefaultLabel
+	}
+	return c.Label
+}
+
+func (c *Config) envKeys() []string {
+	keys := make([]string, 0, len(c.Env))
+	for k := range c.Env {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+// Path is where the service definition is written; "" on Windows (no file).
+func Path(c Config) string {
+	switch c.GOOS {
+	case "darwin":
+		return filepath.Join(c.Home, "Library", "LaunchAgents", c.label()+".plist")
+	case "linux":
+		if c.System {
+			root := c.Root
+			if root == "" {
+				root = "/"
+			}
+			return filepath.Join(root, "etc", "systemd", "system", c.label()+".service")
+		}
+		return filepath.Join(c.Home, ".config", "systemd", "user", c.label()+".service")
+	}
+	return ""
+}
+
+func xmlText(s string) string {
+	var b bytes.Buffer
+	xml.EscapeText(&b, []byte(s))
+	return b.String()
+}
+
+// Plist is the launchd user agent.
+func Plist(c Config) string {
+	logDir := c.LogDir
+	if logDir == "" {
+		logDir = filepath.Join(c.Home, "Library", "Logs")
+	}
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+`)
+	kv := func(k, v string) { fmt.Fprintf(&b, "\t<key>%s</key>\n\t<string>%s</string>\n", k, xmlText(v)) }
+	kv("Label", c.label())
+	fmt.Fprintf(&b, "\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s</string>\n\t\t<string>run</string>\n\t</array>\n", xmlText(c.Binary))
+	b.WriteString("\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<true/>\n")
+	if len(c.Env) > 0 {
+		b.WriteString("\t<key>EnvironmentVariables</key>\n\t<dict>\n")
+		for _, k := range c.envKeys() {
+			fmt.Fprintf(&b, "\t\t<key>%s</key>\n\t\t<string>%s</string>\n", xmlText(k), xmlText(c.Env[k]))
+		}
+		b.WriteString("\t</dict>\n")
+	}
+	kv("StandardOutPath", filepath.Join(logDir, c.label()+".log"))
+	kv("StandardErrorPath", filepath.Join(logDir, c.label()+".log"))
+	b.WriteString("</dict>\n</plist>\n")
+	return b.String()
+}
+
+// systemdQuote quotes a value for an Environment= or ExecStart= word.
+func systemdQuote(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "$", "$$")
+	return `"` + r.Replace(s) + `"`
+}
+
+// SystemdUnit is the systemd service unit.
+func SystemdUnit(c Config) string {
+	var b strings.Builder
+	b.WriteString("[Unit]\nDescription=DUMB worker (Distributed User-owned Model Backend)\n")
+	b.WriteString("Wants=network-online.target\nAfter=network-online.target\n\n[Service]\n")
+	fmt.Fprintf(&b, "ExecStart=%s run\n", systemdQuote(c.Binary))
+	for _, k := range c.envKeys() {
+		fmt.Fprintf(&b, "Environment=%s\n", systemdQuote(k+"="+c.Env[k]))
+	}
+	b.WriteString("Restart=always\nRestartSec=5\n\n[Install]\n")
+	if c.System {
+		b.WriteString("WantedBy=multi-user.target\n")
+	} else {
+		b.WriteString("WantedBy=default.target\n")
+	}
+	return b.String()
+}
+
+// WindowsCreateArgs are the sc.exe arguments that register the service. sc.exe
+// cannot set environment variables, so configuration travels as flags.
+func WindowsCreateArgs(c Config) []string {
+	bin := []string{`"` + c.Binary + `"`, "run"}
+	for _, k := range c.envKeys() {
+		if f, ok := envFlags[k]; ok {
+			bin = append(bin, "-"+f, `"`+c.Env[k]+`"`)
+		}
+	}
+	return []string{"create", c.label(), "binPath=", strings.Join(bin, " "), "start=", "auto", "DisplayName=", "DUMB worker"}
+}
+
+// envFlags maps configuration variables to dumb-worker flags.
+var envFlags = map[string]string{
+	"DUMB_SERVER": "server", "DUMB_TOKEN_FILE": "token-file", "DUMB_MODELS": "models",
+	"DUMB_CAPACITY": "capacity", "DUMB_OLLAMA": "ollama",
+}
+
+// Print returns the service definition as it would be installed.
+func Print(c Config) (string, error) {
+	switch c.GOOS {
+	case "darwin":
+		return Plist(c), nil
+	case "linux":
+		return SystemdUnit(c), nil
+	case "windows":
+		args := WindowsCreateArgs(c)
+		for i, a := range args {
+			if strings.ContainsAny(a, " \"") {
+				args[i] = strconv.Quote(a)
+			}
+		}
+		return "sc.exe " + strings.Join(args, " ") + "\n", nil
+	}
+	return "", fmt.Errorf("service: unsupported OS %s", c.GOOS)
+}
+
+func (c *Config) write(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func (c *Config) remove(path string) error {
+	err := os.Remove(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func (c *Config) systemctl() []string {
+	if c.System {
+		return []string{"systemctl"}
+	}
+	return []string{"systemctl", "--user"}
+}
+
+func (c *Config) run(ctx context.Context, argv []string) error {
+	return c.Runner.Run(ctx, argv[0], argv[1:]...)
+}
+
+// Install writes the service definition and starts the service.
+func Install(ctx context.Context, c Config) error {
+	if !filepath.IsAbs(c.Binary) {
+		return fmt.Errorf("service: binary path %q must be absolute", c.Binary)
+	}
+	switch c.GOOS {
+	case "darwin":
+		p, domain := Path(c), "gui/"+strconv.Itoa(c.UID)
+		if err := c.write(p, []byte(Plist(c))); err != nil {
+			return err
+		}
+		// A previous version may still be loaded; bootstrap fails if it is.
+		c.run(ctx, []string{"launchctl", "bootout", domain + "/" + c.label()})
+		return c.run(ctx, []string{"launchctl", "bootstrap", domain, p})
+	case "linux":
+		if err := c.write(Path(c), []byte(SystemdUnit(c))); err != nil {
+			return err
+		}
+		if err := c.run(ctx, append(c.systemctl(), "daemon-reload")); err != nil {
+			return err
+		}
+		return c.run(ctx, append(c.systemctl(), "enable", "--now", c.label()+".service"))
+	case "windows":
+		if err := c.run(ctx, append([]string{"sc.exe"}, WindowsCreateArgs(c)...)); err != nil {
+			return err
+		}
+		return c.run(ctx, []string{"sc.exe", "start", c.label()})
+	}
+	return fmt.Errorf("service: unsupported OS %s", c.GOOS)
+}
+
+// Uninstall stops the service and removes its definition.
+func Uninstall(ctx context.Context, c Config) error {
+	switch c.GOOS {
+	case "darwin":
+		c.run(ctx, []string{"launchctl", "bootout", "gui/" + strconv.Itoa(c.UID) + "/" + c.label()})
+		return c.remove(Path(c))
+	case "linux":
+		c.run(ctx, append(c.systemctl(), "disable", "--now", c.label()+".service"))
+		if err := c.remove(Path(c)); err != nil {
+			return err
+		}
+		return c.run(ctx, append(c.systemctl(), "daemon-reload"))
+	case "windows":
+		c.run(ctx, []string{"sc.exe", "stop", c.label()})
+		return c.run(ctx, []string{"sc.exe", "delete", c.label()})
+	}
+	return fmt.Errorf("service: unsupported OS %s", c.GOOS)
+}

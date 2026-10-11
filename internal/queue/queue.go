@@ -81,8 +81,9 @@ func (q *Queue) Submit(req protocol.SubmitRequest) string {
 func (q *Queue) Claim(ctx context.Context, workerID string, models []string) (*protocol.Assignment, error) {
 	for {
 		q.mu.Lock()
+		now := time.Now()
 		for i, j := range q.pending {
-			if !slices.Contains(models, j.req.Model) {
+			if !slices.Contains(models, j.req.Model) || !now.Before(j.deadline) {
 				continue
 			}
 			q.pending = slices.Delete(q.pending, i, i+1)
@@ -143,6 +144,11 @@ func (q *Queue) Wait(ctx context.Context, jobID string) (protocol.JobStatus, err
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	// The caller's wait is usually clamped to the deadline, so it can end a hair
+	// before the expiry timer fires; a past deadline is expired either way.
+	if !time.Now().Before(j.deadline) {
+		q.expireLocked(j)
+	}
 	return protocol.JobStatus{JobID: j.id, State: j.state, Output: j.output, Error: j.err}, nil
 }
 
@@ -167,6 +173,10 @@ func (q *Queue) Pending() int {
 func (q *Queue) expire(j *job) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.expireLocked(j)
+}
+
+func (q *Queue) expireLocked(j *job) {
 	switch j.state {
 	case protocol.StateQueued:
 		if i := slices.Index(q.pending, j); i >= 0 {

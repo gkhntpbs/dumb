@@ -53,6 +53,25 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "426": { $ref: "#/components/responses/UpgradeRequired" }
+  /v1/workers/me:
+    get:
+      tags: [worker]
+      operationId: workerWhoAmI
+      summary: Check the credential and version without side effects.
+      description: >
+        Unlike hello, this does not mark the worker online. `doctor` uses it to
+        verify that the credential is accepted and the version is not too old.
+      parameters:
+        - $ref: "#/components/parameters/WorkerVersion"
+      responses:
+        "200":
+          description: The credential is valid and the version is accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WhoAmI" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "426": { $ref: "#/components/responses/UpgradeRequired" }
   /v1/jobs/next:
     get:
       tags: [worker]
@@ -264,6 +283,12 @@ components:
         max_wait:
           type: string
           description: Longest `wait` the server honours on `GET /v1/jobs/next`.
+    WhoAmI:
+      type: object
+      required: [worker_id, min_worker_version]
+      properties:
+        worker_id: { type: string }
+        min_worker_version: { type: string }
     SubmitRequest:
       type: object
       required: [model, prompt, deadline_ms]

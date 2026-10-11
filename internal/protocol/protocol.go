@@ -49,6 +49,12 @@ type HelloResponse struct {
 	MaxWait          string `json:"max_wait"`
 }
 
+// WhoAmI answers GET /v1/workers/me, a side-effect-free credential and version check.
+type WhoAmI struct {
+	WorkerID         string `json:"worker_id"`
+	MinWorkerVersion string `json:"min_worker_version"`
+}
+
 type SubmitRequest struct {
 	Model      string `json:"model"`
 	Prompt     string `json:"prompt"`

@@ -283,3 +283,25 @@ func TestLongPollAddedLatency(t *testing.T) {
 		t.Fatal("long-poll did not return when a job was queued")
 	}
 }
+
+func TestWhoAmI(t *testing.T) {
+	e := newEnv(t)
+	res, b := e.do("GET", "/v1/workers/me", workerToken, "1.2.0", nil)
+	var me protocol.WhoAmI
+	json.Unmarshal(b, &me)
+	if res.StatusCode != 200 || me.WorkerID != "w1" || me.MinWorkerVersion != "1.2.0" {
+		t.Fatalf("valid: %d %s", res.StatusCode, b)
+	}
+	if st := e.srv.Status(); st.WorkersOnline != 0 {
+		t.Errorf("whoami marked the worker online: %+v", st)
+	}
+	if res, _ := e.do("GET", "/v1/workers/me", "nope", "1.2.0", nil); res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("wrong token: got %d, want 401", res.StatusCode)
+	}
+	res, b = e.do("GET", "/v1/workers/me", workerToken, "1.1.0", nil)
+	var ue protocol.UpgradeError
+	json.Unmarshal(b, &ue)
+	if res.StatusCode != http.StatusUpgradeRequired || ue.MinWorkerVersion != "1.2.0" {
+		t.Errorf("old worker: got %d %s, want 426", res.StatusCode, b)
+	}
+}

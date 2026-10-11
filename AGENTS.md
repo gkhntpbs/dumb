@@ -3,7 +3,8 @@
 DUMB (Distributed User-owned Model Backend): the protocol, the server (`cmd/dumb-server`), the
 worker (`cmd/dumb-worker`) and the `Auth` interface, in Go. **Status:** protocol v1 is defined; the server
 has an in-memory queue with leases, long-poll and caller endpoints, and a static-token `Auth`.
-The worker is still a stub. Next: the worker (see `TODO.md`).
+The worker runs the agent loop (hello, long-poll, generate on the local Ollama), has `doctor`,
+`setup` and `service` commands. Next: updates / release (see `TODO.md`).
 
 > **Session start:** read `.claude/session-commands.txt` and briefly show the user the skills.
 
@@ -17,6 +18,10 @@ The worker is still a stub. Next: the worker (see `TODO.md`).
 | `internal/queue/` | In-memory job queue with leases | **ACTIVE** |
 | `internal/server/` | HTTP handlers for the protocol | **ACTIVE** |
 | `internal/auth/` | `Authenticator` interface + `StaticTokens` reference (hash-only, revocable) | **ACTIVE** |
+| `internal/ollama/` | Loopback-only Ollama API client + detect / install / start (injectable seams) | **ACTIVE** |
+| `internal/worker/` | Agent loop: hello, long-poll, run job, post result | **ACTIVE** |
+| `internal/doctor/` | Readiness checks behind `dumb-worker doctor` | **ACTIVE** |
+| `internal/service/` | launchd / systemd / Windows service definitions and install | **ACTIVE** |
 | `docs/` | Protocol and design docs | — |
 | `qa-automation/` | Build gate (unit tests only) | **ACTIVE** — follow `qa-automation/README.md` |
 
@@ -50,6 +55,7 @@ in the private `ops` repository, never here.
 ```bash
 go run ./cmd/dumb-server    # run locally
 go test ./...               # unit tests
+QA_OLLAMA=1 go test -run Integration -v ./internal/ollama   # against a local Ollama
 go build ./...              # build
 ```
 

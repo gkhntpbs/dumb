@@ -147,3 +147,19 @@ func TestClaimWakesOnSubmit(t *testing.T) {
 		t.Fatal("blocked claimer never woke")
 	}
 }
+
+// TestWaitAtDeadlineReportsExpired covers a caller whose wait ends exactly at the
+// deadline, racing the expiry timer: it must see expired, never queued.
+func TestWaitAtDeadlineReportsExpired(t *testing.T) {
+	for range 20 {
+		q := New()
+		id := q.Submit(protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 5})
+		d, _ := q.Deadline(id)
+		ctx, cancel := context.WithDeadline(context.Background(), d)
+		st, err := q.Wait(ctx, id)
+		cancel()
+		if err != nil || st.State != protocol.StateExpired {
+			t.Fatalf("got %+v, %v; want expired", st, err)
+		}
+	}
+}

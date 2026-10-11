@@ -58,6 +58,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	s := &Server{cfg: cfg, min: min, q: queue.New(), mux: http.NewServeMux(), workers: map[string]*worker{}}
 	s.mux.HandleFunc("POST /v1/workers/hello", s.asWorker(s.hello))
+	s.mux.HandleFunc("GET /v1/workers/me", s.asWorker(s.whoami))
 	s.mux.HandleFunc("GET /v1/jobs/next", s.asWorker(s.claim))
 	s.mux.HandleFunc("POST /v1/jobs/{id}/result", s.asWorker(s.result))
 	s.mux.HandleFunc("POST /v1/jobs", s.asCaller(s.submit))
@@ -142,6 +143,11 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request, p auth.Principal)
 		MinWorkerVersion: s.min.String(),
 		MaxWait:          s.cfg.MaxWait.String(),
 	})
+}
+
+// whoami confirms the credential and version; unlike hello it changes nothing.
+func (s *Server) whoami(w http.ResponseWriter, _ *http.Request, p auth.Principal) {
+	writeJSON(w, http.StatusOK, protocol.WhoAmI{WorkerID: p.ID, MinWorkerVersion: s.min.String()})
 }
 
 func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal) {
