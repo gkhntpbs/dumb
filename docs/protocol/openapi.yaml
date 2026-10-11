@@ -226,7 +226,7 @@ components:
       in: header
       required: true
       description: The worker's semantic version, e.g. `1.4.2`.
-      schema: { type: string, pattern: '^v?\d+\.\d+\.\d+$' }
+      schema: { type: string, pattern: '^v?\d+\.\d+\.\d+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' }
     JobID:
       name: id
       in: path

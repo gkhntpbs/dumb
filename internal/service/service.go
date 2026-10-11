@@ -91,7 +91,12 @@ func Plist(c Config) string {
 	kv := func(k, v string) { fmt.Fprintf(&b, "\t<key>%s</key>\n\t<string>%s</string>\n", k, xmlText(v)) }
 	kv("Label", c.label())
 	fmt.Fprintf(&b, "\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s</string>\n\t\t<string>run</string>\n\t</array>\n", xmlText(c.Binary))
+	// KeepAlive restarts every exit, including 4 (restart after an update or
+	// rollback). launchd respawns at once when the job ran at least
+	// ThrottleInterval seconds, otherwise after the rest of it. The worker no
+	// longer exits on 426, so an outdated worker does not spin.
 	b.WriteString("\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<true/>\n")
+	b.WriteString("\t<key>ThrottleInterval</key>\n\t<integer>10</integer>\n")
 	if len(c.Env) > 0 {
 		b.WriteString("\t<key>EnvironmentVariables</key>\n\t<dict>\n")
 		for _, k := range c.envKeys() {
@@ -120,6 +125,7 @@ func SystemdUnit(c Config) string {
 	for _, k := range c.envKeys() {
 		fmt.Fprintf(&b, "Environment=%s\n", systemdQuote(k+"="+c.Env[k]))
 	}
+	// Restart=always covers exit code 4 (restart after an update or rollback).
 	b.WriteString("Restart=always\nRestartSec=5\n\n[Install]\n")
 	if c.System {
 		b.WriteString("WantedBy=multi-user.target\n")
@@ -141,10 +147,17 @@ func WindowsCreateArgs(c Config) []string {
 	return []string{"create", c.label(), "binPath=", strings.Join(bin, " "), "start=", "auto", "DisplayName=", "DUMB worker"}
 }
 
+// WindowsFailureArgs make the Service Control Manager restart the worker
+// after it exits: at once, then after 5s and 60s; the count resets daily.
+func WindowsFailureArgs(c Config) []string {
+	return []string{"failure", c.label(), "reset=", "86400", "actions=", "restart/0/restart/5000/restart/60000"}
+}
+
 // envFlags maps configuration variables to dumb-worker flags.
 var envFlags = map[string]string{
 	"DUMB_SERVER": "server", "DUMB_TOKEN_FILE": "token-file", "DUMB_MODELS": "models",
-	"DUMB_CAPACITY": "capacity", "DUMB_OLLAMA": "ollama",
+	"DUMB_CAPACITY": "capacity", "DUMB_OLLAMA": "ollama", "DUMB_CHANNEL": "channel",
+	"DUMB_UPDATE_URL": "update-url",
 }
 
 // Print returns the service definition as it would be installed.
@@ -216,6 +229,10 @@ func Install(ctx context.Context, c Config) error {
 		return c.run(ctx, append(c.systemctl(), "enable", "--now", c.label()+".service"))
 	case "windows":
 		if err := c.run(ctx, append([]string{"sc.exe"}, WindowsCreateArgs(c)...)); err != nil {
+			return err
+		}
+		// Restart on any non-zero exit, including 4 (after an update or rollback).
+		if err := c.run(ctx, append([]string{"sc.exe"}, WindowsFailureArgs(c)...)); err != nil {
 			return err
 		}
 		return c.run(ctx, []string{"sc.exe", "start", c.label()})

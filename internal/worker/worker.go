@@ -50,6 +50,7 @@ type Config struct {
 	Version   string   // this worker's semantic version
 	Logger    *log.Logger
 	Ollama    Generator // default: an ollama.Client for OllamaURL
+	OnHello   func()    // called after every successful hello (optional)
 }
 
 // CheckServerURL requires https unless the host is loopback.
@@ -101,6 +102,10 @@ type Worker struct {
 
 	mu      sync.Mutex
 	maxWait time.Duration
+
+	// draining is cancelled by Drain: no new claims, running jobs finish.
+	draining context.Context
+	drain    context.CancelFunc
 }
 
 func New(cfg Config) (*Worker, error) {
@@ -114,7 +119,7 @@ func New(cfg Config) (*Worker, error) {
 	if len(cfg.Models) == 0 {
 		return nil, errors.New("worker: at least one model is required")
 	}
-	if _, err := protocol.ParseSemVer(cfg.Version); err != nil {
+	if _, err := protocol.ParseReleaseVersion(cfg.Version); err != nil {
 		return nil, fmt.Errorf("worker: %w", err)
 	}
 	if cfg.Capacity <= 0 {
@@ -134,7 +139,9 @@ func New(cfg Config) (*Worker, error) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	tr.TLSHandshakeTimeout = 10 * time.Second
+	draining, drain := context.WithCancel(context.Background())
 	return &Worker{
+		draining: draining, drain: drain,
 		cfg: cfg, base: base, gen: gen, log: cfg.Logger,
 		// Per-request deadlines come from contexts: a long-poll needs more than other calls.
 		http:    &http.Client{Transport: tr},
@@ -243,6 +250,9 @@ func (w *Worker) hello(ctx context.Context) error {
 				w.mu.Unlock()
 			}
 			w.log.Printf("hello: worker %s, models %v, capacity %d, max wait %s", res.WorkerID, w.cfg.Models, w.cfg.Capacity, res.MaxWait)
+			if w.cfg.OnHello != nil {
+				w.cfg.OnHello()
+			}
 			return nil
 		case fatal(err):
 			return err
@@ -259,8 +269,12 @@ func (w *Worker) hello(ctx context.Context) error {
 	}
 }
 
-// Run says hello and serves jobs until ctx ends or the server refuses the
-// worker (ErrUnauthorized, *ErrUpgradeRequired).
+// Drain stops claiming new jobs; Run returns nil once the jobs in flight have
+// finished (each is bounded by its lease deadline). Safe to call at any time.
+func (w *Worker) Drain() { w.drain() }
+
+// Run says hello and serves jobs until ctx ends, Drain is called or the server
+// refuses the worker (ErrUnauthorized, *ErrUpgradeRequired).
 func (w *Worker) Run(ctx context.Context) error {
 	if err := w.hello(ctx); err != nil {
 		return err
@@ -281,23 +295,27 @@ func (w *Worker) Run(ctx context.Context) error {
 
 func (w *Worker) loop(ctx context.Context) error {
 	failures := 0
-	for ctx.Err() == nil {
+	for ctx.Err() == nil && w.draining.Err() == nil {
 		w.mu.Lock()
 		wait := w.maxWait
 		w.mu.Unlock()
 		var a protocol.Assignment
 		rctx, cancel := context.WithTimeout(ctx, wait+pollMargin)
+		stop := context.AfterFunc(w.draining, cancel) // Drain aborts the long-poll
 		code, err := w.call(rctx, http.MethodGet, "/v1/jobs/next", "wait="+wait.String(), nil, &a)
+		stop()
 		cancel()
 		switch {
 		case fatal(err):
 			return err
-		case ctx.Err() != nil:
-			return nil
 		case err == nil && code == http.StatusOK:
+			// A job that arrived is run even when draining or stopping: runJob
+			// reports it either way, so the caller is not left waiting.
 			failures = 0
 			w.runJob(ctx, a)
 			continue
+		case ctx.Err() != nil, w.draining.Err() != nil:
+			return nil
 		case err == nil && code == http.StatusNoContent:
 			failures = 0
 			continue

@@ -121,6 +121,13 @@ func TestMinWorkerVersion(t *testing.T) {
 	if res.StatusCode != http.StatusBadRequest {
 		t.Errorf("missing version: got %d, want 400", res.StatusCode)
 	}
+	// A pre-release sorts below its release: 1.2.0-beta.1 < 1.2.0 <= 1.2.1-beta.1.
+	if res, _ := e.do("GET", "/v1/workers/me", workerToken, "1.2.0-beta.1", nil); res.StatusCode != http.StatusUpgradeRequired {
+		t.Errorf("1.2.0-beta.1: got %d, want 426", res.StatusCode)
+	}
+	if res, _ := e.do("GET", "/v1/workers/me", workerToken, "1.2.1-beta.1", nil); res.StatusCode != http.StatusOK {
+		t.Errorf("1.2.1-beta.1: got %d, want 200", res.StatusCode)
+	}
 }
 
 func TestClaimRequiresHello(t *testing.T) {

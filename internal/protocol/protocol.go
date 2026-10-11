@@ -122,3 +122,97 @@ func (v SemVer) Less(o SemVer) bool {
 }
 
 func (v SemVer) String() string { return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2]) }
+
+// ReleaseVersion is a SemVer with an optional pre-release, e.g. "0.2.0-beta.1".
+// Release tags and X-DUMB-Worker-Version use it; a pre-release sorts below
+// the release it precedes (0.2.0-beta.1 < 0.2.0), as in semver.org §11.
+type ReleaseVersion struct {
+	SemVer
+	Pre string // dot-separated identifiers; "" for a release
+}
+
+// ParseReleaseVersion accepts everything ParseSemVer accepts, plus "-<pre-release>".
+// Build metadata ("+...") is rejected.
+func ParseReleaseVersion(s string) (ReleaseVersion, error) {
+	core, pre, hasPre := strings.Cut(strings.TrimPrefix(s, "v"), "-")
+	sv, err := ParseSemVer(core)
+	if err != nil {
+		return ReleaseVersion{}, fmt.Errorf("version %q: want MAJOR.MINOR.PATCH[-PRERELEASE]", s)
+	}
+	if hasPre {
+		for _, id := range strings.Split(pre, ".") {
+			if id == "" || strings.Trim(id, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-") != "" {
+				return ReleaseVersion{}, fmt.Errorf("version %q: bad pre-release %q", s, pre)
+			}
+		}
+	}
+	return ReleaseVersion{SemVer: sv, Pre: pre}, nil
+}
+
+// Compare returns -1, 0 or +1 as v is older than, equal to or newer than o.
+func (v ReleaseVersion) Compare(o ReleaseVersion) int {
+	switch {
+	case v.SemVer.Less(o.SemVer):
+		return -1
+	case o.SemVer.Less(v.SemVer):
+		return 1
+	case v.Pre == o.Pre:
+		return 0
+	case v.Pre == "":
+		return 1
+	case o.Pre == "":
+		return -1
+	}
+	a, b := strings.Split(v.Pre, "."), strings.Split(o.Pre, ".")
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if c := compareIdent(a[i], b[i]); c != 0 {
+			return c
+		}
+	}
+	switch {
+	case len(a) < len(b):
+		return -1
+	case len(a) > len(b):
+		return 1
+	}
+	return 0
+}
+
+// compareIdent orders pre-release identifiers: numeric ones numerically and
+// below alphanumeric ones, alphanumeric ones in ASCII order.
+func compareIdent(a, b string) int {
+	na, ea := strconv.Atoi(a)
+	nb, eb := strconv.Atoi(b)
+	switch {
+	case ea == nil && eb == nil:
+		return cmpInt(na, nb)
+	case ea == nil:
+		return -1
+	case eb == nil:
+		return 1
+	}
+	return strings.Compare(a, b)
+}
+
+func cmpInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
+// Less reports whether v is older than o.
+func (v ReleaseVersion) Less(o ReleaseVersion) bool { return v.Compare(o) < 0 }
+
+// IsPrerelease reports whether v carries a pre-release suffix.
+func (v ReleaseVersion) IsPrerelease() bool { return v.Pre != "" }
+
+func (v ReleaseVersion) String() string {
+	if v.Pre == "" {
+		return v.SemVer.String()
+	}
+	return v.SemVer.String() + "-" + v.Pre
+}

@@ -4,7 +4,9 @@ DUMB (Distributed User-owned Model Backend): the protocol, the server (`cmd/dumb
 worker (`cmd/dumb-worker`) and the `Auth` interface, in Go. **Status:** protocol v1 is defined; the server
 has an in-memory queue with leases, long-poll and caller endpoints, and a static-token `Auth`.
 The worker runs the agent loop (hello, long-poll, generate on the local Ollama), has `doctor`,
-`setup` and `service` commands. Next: updates / release (see `TODO.md`).
+`setup` and `service` commands, and updates itself from signed GitHub Releases (minisign,
+atomic swap, probation + rollback, `stable` / `beta` channels). Release pipeline: goreleaser +
+GitHub Actions, not yet run for real. Next: see `TODO.md`.
 
 > **Session start:** read `.claude/session-commands.txt` and briefly show the user the skills.
 
@@ -22,6 +24,9 @@ The worker runs the agent loop (hello, long-poll, generate on the local Ollama),
 | `internal/worker/` | Agent loop: hello, long-poll, run job, post result | **ACTIVE** |
 | `internal/doctor/` | Readiness checks behind `dumb-worker doctor` | **ACTIVE** |
 | `internal/service/` | launchd / systemd / Windows service definitions and install | **ACTIVE** |
+| `internal/update/` | Self-updater: GitHub releases, minisign verification, atomic swap, probation / rollback. Worker only — the server must not import it | **ACTIVE** |
+| `internal/update/updatetest/`, `internal/update/e2e/fakegh/` | Throwaway minisign keys/signatures and a fake GitHub Releases server for tests | test tooling |
+| `.goreleaser.yaml`, `.github/workflows/` | Release build (`release.yaml`, on `v*` tags) and CI (`ci.yaml`) | **ACTIVE** |
 | `docs/` | Protocol and design docs | — |
 | `qa-automation/` | Build gate (unit tests only) | **ACTIVE** — follow `qa-automation/README.md` |
 
@@ -44,6 +49,8 @@ in the private `ops` repository, never here.
 - **Workers accept no inbound connections.** Outbound HTTPS (long-poll) to the server only.
   Ollama listens on `127.0.0.1` only.
 - **Go, standard library first.** A third-party dependency in the server needs a written reason.
+  The only dependency is `golang.org/x/crypto/blake2b`, used by the worker's updater for
+  minisign; `TestServerHasNoThirdPartyDeps` keeps it out of the server.
 - **Worker updates are signed, atomic and reversible.** A binary whose signature does not
   verify is never applied.
 - Everything in this repository — code, comments, docs, commit messages — is in English.
@@ -57,7 +64,19 @@ go run ./cmd/dumb-server    # run locally
 go test ./...               # unit tests
 QA_OLLAMA=1 go test -run Integration -v ./internal/ollama   # against a local Ollama
 go build ./...              # build
+./qa-automation/scripts/update-e2e.sh   # local signed self-update end to end (no GitHub)
+go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean --skip=publish  # dry-run release into dist/
 ```
+
+## Releases
+
+Details: `docs/release.md`. A release is cut **only on the user's explicit command** by pushing
+a `vX.Y.Z` (or `vX.Y.Z-beta.N`) tag; `.github/workflows/release.yaml` runs the gate, goreleaser
+(draft), signs `checksums.txt` with minisign, uploads `checksums.txt.minisig`, then publishes.
+Repository configuration, by name only: secrets `MINISIGN_SECRET_KEY`, `MINISIGN_PASSWORD`;
+variable `MINISIGN_PUBLIC_KEY` (embedded into workers via `-X .../internal/update.PublicKey`).
+The key pair is owned by the private `ops` repository. Worker exit code 4 = "restart me"
+(after an update or a rollback).
 
 ## QA
 

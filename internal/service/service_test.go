@@ -58,7 +58,7 @@ func TestPlistIsValidXML(t *testing.T) {
 			t.Errorf("plist lacks %q: %q", want, strs)
 		}
 	}
-	for _, want := range []string{"<key>RunAtLoad</key>\n\t<true/>", "<key>KeepAlive</key>\n\t<true/>", "StandardErrorPath"} {
+	for _, want := range []string{"<key>RunAtLoad</key>\n\t<true/>", "<key>KeepAlive</key>\n\t<true/>", "<key>ThrottleInterval</key>\n\t<integer>10</integer>", "StandardErrorPath"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("plist lacks %q", want)
 		}
@@ -113,7 +113,8 @@ func TestInstallUninstall(t *testing.T) {
 			[]string{"systemctl daemon-reload", "systemctl enable --now dumb-worker.service"},
 			[]string{"systemctl disable --now dumb-worker.service", "systemctl daemon-reload"}},
 		{"windows", false,
-			[]string{"sc.exe create dumb-worker binPath= \"/opt/dumb & co/dumb-worker\" run -models \"a:1b,b<2>\" -server \"https://dumb.example.invalid\" -token-file \"/home/u/.dumb/token\" start= auto DisplayName= DUMB worker", "sc.exe start dumb-worker"},
+			[]string{"sc.exe create dumb-worker binPath= \"/opt/dumb & co/dumb-worker\" run -models \"a:1b,b<2>\" -server \"https://dumb.example.invalid\" -token-file \"/home/u/.dumb/token\" start= auto DisplayName= DUMB worker",
+				"sc.exe failure dumb-worker reset= 86400 actions= restart/0/restart/5000/restart/60000", "sc.exe start dumb-worker"},
 			[]string{"sc.exe stop dumb-worker", "sc.exe delete dumb-worker"}},
 	}
 	for _, tc := range cases {

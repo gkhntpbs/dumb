@@ -30,6 +30,39 @@ func TestSemVer(t *testing.T) {
 	if a.Less(a) {
 		t.Error("equal versions reported as less")
 	}
+	// ParseSemVer stays strict: a pre-release is ParseReleaseVersion's business.
+	if _, err := ParseSemVer("1.2.3-beta.1"); err == nil {
+		t.Error("ParseSemVer accepted a pre-release")
+	}
+}
+
+func TestVersion(t *testing.T) {
+	v, err := ParseReleaseVersion("v0.2.0-beta.1")
+	if err != nil || v != (ReleaseVersion{SemVer{0, 2, 0}, "beta.1"}) || v.String() != "0.2.0-beta.1" || !v.IsPrerelease() {
+		t.Fatalf("got %+v, %v", v, err)
+	}
+	for _, bad := range []string{"", "1.2", "1.2.3-", "1.2.3-beta..1", "1.2.3+build", "1.2.3-be_ta", "v-1.2.3"} {
+		if _, err := ParseReleaseVersion(bad); err == nil {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+	// semver.org §11 ordering.
+	order := []string{"1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2",
+		"1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "1.0.1-beta.1", "1.0.1"}
+	for i := 0; i+1 < len(order); i++ {
+		x, err1 := ParseReleaseVersion(order[i])
+		y, err2 := ParseReleaseVersion(order[i+1])
+		if err1 != nil || err2 != nil {
+			t.Fatal(err1, err2)
+		}
+		if !x.Less(y) || y.Less(x) || x.Compare(x) != 0 {
+			t.Errorf("%s < %s failed", order[i], order[i+1])
+		}
+	}
+	// Every plain SemVer parses to the same core with no pre-release.
+	if v, err := ParseReleaseVersion("1.2.3"); err != nil || v.SemVer != (SemVer{1, 2, 3}) || v.Pre != "" {
+		t.Errorf("got %+v, %v", v, err)
+	}
 }
 
 // TestTypesMatchSpec checks that every schema in openapi.yaml has a Go type

@@ -212,3 +212,56 @@ func TestTokenFile(t *testing.T) {
 		t.Error("empty token accepted")
 	}
 }
+
+// gatedOllama blocks every Generate until release is closed.
+type gatedOllama struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedOllama) Generate(ctx context.Context, r ollama.GenerateRequest) (string, error) {
+	g.started <- struct{}{}
+	select {
+	case <-g.release:
+		return `{"ok":true}`, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func TestDrainFinishesJobsInFlight(t *testing.T) {
+	ts := newServer(t, "0.1.0", nil)
+	g := &gatedOllama{started: make(chan struct{}, 1), release: make(chan struct{})}
+	var hellos atomic.Int32
+	w, err := New(Config{ServerURL: ts.URL, Token: workerToken, Models: []string{model}, Capacity: 2,
+		Version: "0.1.1-beta.1", Ollama: g, OnHello: func() { hellos.Add(1) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- w.Run(context.Background()) }()
+	result := make(chan protocol.JobStatus, 1)
+	go func() { _, st := submit(t, ts.URL, model); result <- st }()
+	<-g.started // the job is running
+	w.Drain()
+	select {
+	case err := <-done:
+		t.Fatalf("Run returned %v with a job in flight", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(g.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run after drain: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after drain")
+	}
+	if st := <-result; st.State != protocol.StateDone {
+		t.Fatalf("drained job: %+v", st)
+	}
+	if hellos.Load() != 1 {
+		t.Errorf("OnHello called %d times, want 1", hellos.Load())
+	}
+}

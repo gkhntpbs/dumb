@@ -1,0 +1,71 @@
+# Cuts a release when a vX.Y.Z / vX.Y.Z-beta.N tag is pushed. See docs/release.md.
+#
+# Repository configuration (names only; values live in GitHub settings, never here):
+#   secrets.MINISIGN_SECRET_KEY  minisign secret key file contents (encrypted)
+#   secrets.MINISIGN_PASSWORD    its password
+#   vars.MINISIGN_PUBLIC_KEY     the matching public key line ("RW..."), embedded in workers
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      DUMB_RELEASE_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build gate
+        run: ./qa-automation/scripts/build-gate.sh
+
+      - name: Require the release public key
+        run: |
+          if [ -z "$DUMB_RELEASE_PUBLIC_KEY" ]; then
+            echo "::error::vars.MINISIGN_PUBLIC_KEY is not set; workers would be built with self-update disabled"
+            exit 1
+          fi
+
+      - name: Build and upload (draft release)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y minisign
+
+      - name: Sign checksums.txt
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/minisign.key"
+          trap 'rm -f "$key"' EXIT
+          umask 077
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$key" -m dist/checksums.txt \
+            -t "dumb $GITHUB_REF_NAME checksums.txt"
+          # Never publish a signature the workers would reject.
+          minisign -V -P "$DUMB_RELEASE_PUBLIC_KEY" -m dist/checksums.txt
+
+      - name: Attach the signature and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" dist/checksums.txt.minisig
+          gh release edit "$GITHUB_REF_NAME" --draft=false

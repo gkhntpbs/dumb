@@ -35,7 +35,7 @@ type worker struct {
 
 type Server struct {
 	cfg     Config
-	min     protocol.SemVer
+	min     protocol.ReleaseVersion
 	q       *queue.Queue
 	mux     *http.ServeMux
 	mu      sync.Mutex
@@ -46,7 +46,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Auth == nil {
 		return nil, errors.New("server: Auth is required")
 	}
-	min, err := protocol.ParseSemVer(cfg.MinWorkerVersion)
+	min, err := protocol.ParseReleaseVersion(cfg.MinWorkerVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func (s *Server) asWorker(h handler) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		v, err := protocol.ParseSemVer(r.Header.Get(protocol.WorkerVersionHeader))
+		v, err := protocol.ParseReleaseVersion(r.Header.Get(protocol.WorkerVersionHeader))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, protocol.WorkerVersionHeader+": "+err.Error())
 			return

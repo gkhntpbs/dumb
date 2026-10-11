@@ -16,6 +16,11 @@
 //	-models      DUMB_MODELS      comma-separated Ollama models to serve
 //	-capacity    DUMB_CAPACITY    jobs run at the same time (default 1)
 //	-ollama      DUMB_OLLAMA      Ollama URL (default http://127.0.0.1:11434; loopback only)
+//	-channel     DUMB_CHANNEL     update channel: stable (default) or beta
+//	-update-url  DUMB_UPDATE_URL  GitHub API base URL for releases (default https://api.github.com)
+//
+// Exit codes: 0 stopped, 1 error, 2 usage, 4 restart (an update or a rollback
+// was applied; the service manager starts the binary now in place).
 package main
 
 import (
@@ -40,6 +45,7 @@ import (
 	"github.com/gkhntpbs/dumb/internal/ollama"
 	"github.com/gkhntpbs/dumb/internal/protocol"
 	"github.com/gkhntpbs/dumb/internal/service"
+	"github.com/gkhntpbs/dumb/internal/update"
 	"github.com/gkhntpbs/dumb/internal/worker"
 )
 
@@ -51,11 +57,19 @@ const (
 	exitOK      = 0
 	exitError   = 1
 	exitUsage   = 2
-	exitUpgrade = 3 // the server requires a newer worker
+	exitRestart = 4 // an update or rollback was applied: start the binary again now
+)
+
+// Update timing.
+const (
+	updateEvery    = 6 * time.Hour
+	updateJitter   = time.Hour
+	upgradeWait    = 15 * time.Minute // after a 426 with no usable update; doubles
+	upgradeMaxWait = 2 * time.Hour
 )
 
 func main() {
-	if _, err := protocol.ParseSemVer(version); err != nil {
+	if _, err := protocol.ParseReleaseVersion(version); err != nil {
 		fmt.Fprintln(os.Stderr, "dumb-worker: invalid build version:", err)
 		os.Exit(exitError)
 	}
@@ -67,6 +81,7 @@ func main() {
 
 type config struct {
 	server, tokenFile, models, ollamaURL string
+	channel, updateURL                   string
 	capacity                             int
 	system                               bool // service: Linux system unit
 }
@@ -101,11 +116,16 @@ func parseFlags(name string, args []string, stderr io.Writer) (*config, []string
 	fs.StringVar(&c.models, "models", os.Getenv("DUMB_MODELS"), "comma-separated models (env DUMB_MODELS)")
 	fs.IntVar(&c.capacity, "capacity", capDefault, "concurrent jobs (env DUMB_CAPACITY)")
 	fs.StringVar(&c.ollamaURL, "ollama", env("DUMB_OLLAMA", ollama.DefaultURL), "Ollama URL, loopback only (env DUMB_OLLAMA)")
+	fs.StringVar(&c.channel, "channel", env("DUMB_CHANNEL", update.ChannelStable), "update channel: stable or beta (env DUMB_CHANNEL)")
+	fs.StringVar(&c.updateURL, "update-url", env("DUMB_UPDATE_URL", update.DefaultBaseURL), "GitHub API base URL for releases (env DUMB_UPDATE_URL)")
 	if name == "service" {
 		fs.BoolVar(&c.system, "system", false, "Linux: install a system unit instead of a user unit")
 	}
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, err
+	}
+	if c.channel != update.ChannelStable && c.channel != update.ChannelBeta {
+		return nil, nil, fmt.Errorf("channel %q: want stable or beta", c.channel)
 	}
 	return c, fs.Args(), nil
 }
@@ -160,30 +180,53 @@ func cmdRun(ctx context.Context, c *config, logger *log.Logger) int {
 		logger.Print(err)
 		return exitError
 	}
-	w, err := worker.New(worker.Config{
+	wcfg := worker.Config{
 		ServerURL: c.server, Token: token, Models: c.modelList(), Capacity: c.capacity,
 		OllamaURL: c.ollamaURL, Version: version, Logger: logger,
-	})
-	if err != nil {
+	}
+	if _, err := worker.New(wcfg); err != nil { // validate before touching updates
 		logger.Print(err)
 		return exitError
 	}
-	logger.Printf("version %s, server %s", version, c.server)
-	err = w.Run(ctx)
-	var up *worker.ErrUpgradeRequired
+	logger.Printf("version %s, server %s, channel %s", version, c.server, c.channel)
+	s := &supervisor{
+		version: version, log: logger,
+		every: updateEvery, jitter: updateJitter, backoff: upgradeWait, maxBack: upgradeMaxWait,
+		newWorker: func(onHello func()) (runner, error) {
+			cfg := wcfg
+			cfg.OnHello = onHello
+			return worker.New(cfg)
+		},
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
 	switch {
-	case errors.As(err, &up):
-		// TODO(updates): hand over to the self-updater here; see TODO.md "Updates / release".
-		logger.Printf("UPGRADE REQUIRED: the server accepts version %s or newer; this is %s. Stopping.", up.MinVersion, version)
-		return exitUpgrade
-	case errors.Is(err, context.Canceled) && ctx.Err() != nil:
-		logger.Print("stopped")
-		return exitOK
 	case err != nil:
-		logger.Print(err)
-		return exitError
+		logger.Printf("update: cannot locate this binary (%v); self-update disabled", err)
+	case update.PublicKey == "":
+		logger.Print(update.ErrDisabled)
+	default:
+		s.upd = &update.Updater{
+			Exe: exe, Version: version, Channel: c.channel, Key: update.PublicKey,
+			GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Logger: logger,
+			Source: &update.Source{BaseURL: c.updateURL, UserAgent: "dumb-worker/" + version,
+				HTTP: &http.Client{Timeout: 10 * time.Minute}},
+		}
 	}
-	return exitOK
+	if err == nil {
+		// Probation applies even with updates disabled: a rollback needs no key.
+		p, perr := update.Startup(exe, version, update.DefaultWindow, update.DefaultMaxAttempts, logger)
+		if errors.Is(perr, update.ErrRestart) {
+			return exitRestart
+		}
+		if perr != nil {
+			logger.Print(perr)
+		}
+		s.probation = p
+	}
+	return s.run(ctx)
 }
 
 func cmdDoctor(ctx context.Context, c *config, stdout io.Writer) int {
@@ -293,6 +336,12 @@ func cmdService(ctx context.Context, c *config, sub string, stdout io.Writer, lo
 	}
 	if c.ollamaURL != ollama.DefaultURL {
 		envs["DUMB_OLLAMA"] = c.ollamaURL
+	}
+	if c.channel != update.ChannelStable {
+		envs["DUMB_CHANNEL"] = c.channel
+	}
+	if c.updateURL != update.DefaultBaseURL {
+		envs["DUMB_UPDATE_URL"] = c.updateURL
 	}
 	home, _ := os.UserHomeDir()
 	sc := service.Config{

@@ -21,6 +21,9 @@ import (
 	"github.com/gkhntpbs/dumb/internal/server"
 )
 
+// version is set at build time: -ldflags "-X main.version=1.2.3".
+var version = "0.0.0"
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatal("dumb-server: ", err)
@@ -37,7 +40,7 @@ func run() error {
 		return err
 	}
 	addr := env("DUMB_ADDR", "127.0.0.1:8080")
-	log.Printf("dumb-server: protocol v%d listening on %s", protocol.Version, addr)
+	log.Printf("dumb-server: %s, protocol v%d, listening on %s", version, protocol.Version, addr)
 	hs := &http.Server{Addr: addr, Handler: srv, ReadHeaderTimeout: 10 * time.Second}
 	return hs.ListenAndServe()
 }
