@@ -3,7 +3,7 @@
 .env.*.local
 node_modules/
 
-# QA çıktıları — her koşuda yeniden üretilir
+# QA output — regenerated on every run
 qa-automation/**/results/*
 !qa-automation/**/results/.gitkeep
 qa-automation/**/undefined/

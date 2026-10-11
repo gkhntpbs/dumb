@@ -1,5 +1,4 @@
 @AGENTS.md
 
-<!-- Claude Code bu satırla AGENTS.md'yi içe aktarır. İçerik AGENTS.md'de
-     tutulur — buraya kopya YAZMA (kopya ayrışır). Yalnız Claude'a özgü not gerekirse
-     bu satırın altına ekle. -->
+<!-- Claude Code imports AGENTS.md through the line above. The content lives in AGENTS.md —
+     do not copy it here (copies drift). Add only Claude-specific notes below that line. -->

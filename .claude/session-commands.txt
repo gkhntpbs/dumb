@@ -1,7 +1,7 @@
-📋 DUMB — core/ (Public: protokol, sunucu (cmd/dumb-server), worker (cmd/dumb-worker), Auth arayüzü — Go)
+📋 DUMB — core/ (protocol, server, worker, Auth interface — Go)
 
-  Skill'ler:
-  /core-build  — Kapı yeşilse artefakt üretir ve DURUR (yüklemez/deploy etmez)
+  Skills:
+  /core-build  — builds the artefact if the gate is green, then STOPS (no upload, no deploy)
 
-  Yayınlama (store/push/deploy) YALNIZ açık komutla.
-  Yapılacaklar: TODO.md (+ alt projelerin TODO.md'leri).
+  Publishing (push / release / deploy) ONLY on explicit command.
+  To do: TODO.md

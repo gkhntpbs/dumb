@@ -1,71 +1,78 @@
 # AGENTS.md — DUMB core
 
-Public: protokol, sunucu (cmd/dumb-server), worker (cmd/dumb-worker), Auth arayüzü — Go. **Durum:** iskelet — Go modülü derleniyor, iki binary yalnızca sürüm basıyor; sıradaki: protokol (openapi) ve sunucunun kuyruk/long-poll uçları.
+DUMB (Distributed User-owned Model Backend): the protocol, the server (`cmd/dumb-server`), the
+worker (`cmd/dumb-worker`) and the `Auth` interface, in Go. **Status:** skeleton — the module
+builds and both binaries only print their protocol version. Next: the protocol in
+`docs/protocol/openapi.yaml`, then the server's queue and long-poll endpoints.
 
-> **Oturum başı:** `.claude/session-commands.txt` dosyasını oku ve kullanıcıya ürünleri/skill'leri kısaca göster.
+> **Session start:** read `.claude/session-commands.txt` and briefly show the user the skills.
 
-## Projeler
+## Layout
 
-| Klasör | İçerik | Rol |
+| Directory | Contents | Role |
 |---|---|---|
-| `docs/` | Protocol and design docs (public, English). | — |
-| `qa-automation/` | QA kapısı (none) | **AKTİF** — `qa-automation/README.md`'ye uy |
+| `cmd/dumb-server/` | Job queue + long-poll endpoints | **ACTIVE** |
+| `cmd/dumb-worker/` | Background worker: manages the local Ollama, self-updates | **ACTIVE** |
+| `internal/protocol/` | Wire types — the authority is `docs/protocol/openapi.yaml` | **ACTIVE** |
+| `docs/` | Protocol and design docs | — |
+| `qa-automation/` | Build gate (unit tests only) | **ACTIVE** — follow `qa-automation/README.md` |
 
-| `cmd/dumb-server/` | Kuyruk + long-poll uçları | **AKTİF** |
-| `cmd/dumb-worker/` | Arka plan worker'ı (Ollama yöneticisi, self-update) | **AKTİF** |
-| `internal/protocol/` | Wire tipleri — otorite `docs/protocol/openapi.yaml` | **AKTİF** |
+**This repository is public.** Everything written here must be safe with the whole world
+reading it. Secrets, addresses, node inventory and the production auth implementation belong
+in the private `ops` repository, never here.
 
-Bu repo **public**. Buraya yazılan her şey herkes okuyormuş gibi güvenli olmalı; sır, adres, envanter ve production auth implementasyonu `../ops/`'a gider.
+## Sources of truth
 
+1. **`docs/protocol/openapi.yaml`** — the protocol authority. A change to an endpoint changes
+   the contract first, then the code, in the same commit.
+2. `SECURITY.md` — the security design rules.
+3. The workspace's `docs/adr/` — architecture decisions (outside this repository).
 
-## Kaynak-doğruluk hiyerarşisi
+## Constants
 
-1. **`docs/protocol/openapi.yaml`** — API sözleşme OTORİTESİ bu repo'dadır. Uç değişecekse önce sözleşme, sonra kod, aynı commit'te.
-2. `SECURITY.md` — güvenlik tasarım kuralları.
-3. Workspace `docs/adr/` — mimari kararlar.
+- **DUMB = Distributed User-owned Model Backend.** Use the expansion in README and docs.
+- **Security does not rely on secrecy.** Nothing in this repository depends on being hidden;
+  it relies on secrets that are never in it.
+- **Workers accept no inbound connections.** Outbound HTTPS (long-poll) to the server only.
+  Ollama listens on `127.0.0.1` only.
+- **Go, standard library first.** A third-party dependency in the server needs a written reason.
+- **Worker updates are signed, atomic and reversible.** A binary whose signature does not
+  verify is never applied.
+- Everything in this repository — code, comments, docs, commit messages — is in English.
+- Secrets and test credentials are never committed; they arrive through `QA_`-prefixed
+  environment variables.
 
-## Ortak sabitler (workspace'ten — bilinçli tekrar)
-
-- **DUMB = Distributed User-owned Model Backend.** README ve dokümanlarda açılım bu.
-- **Public / private sınırı:** `core/` public (MIT). Sır, imzalama anahtarı, sunucu adresi, node envanteri ve production auth/pairing implementasyonu yalnız `ops/` (private) içinde. Güvenlik gizlilikle değil, sırlarla sağlanır: `core` içindeki her şey herkes okuyormuş gibi güvenli olmalı.
-- **Worker'lar hiçbir bağlantı kabul etmez.** Yalnızca sunucuya giden HTTPS (long-poll). Ollama yalnız 127.0.0.1.
-- **Go, standart kütüphane önce.** Sunucuda üçüncü taraf bağımlılık eklemek gerekçe ister (ADR).
-- **Worker güncellemesi imzalı, atomik ve geri alınabilir.** İmzası doğrulanmayan binary asla uygulanmaz.
-- Public repo içeriği (kod, yorum, README, commit) İngilizce.
-- Sırlar ve test hesabı kimlikleri repo'ya YAZILMAZ; kimlikler `QA_` önekli env
-  değişkenleriyle geçer. Testlerde satın alma/başvuru/ödeme gibi geri alınamaz işlem YAPILMAZ.
-
-## Çalıştırma
+## Commands
 
 ```bash
-go run ./cmd/dumb-server    # Yerel çalıştırma
-go test ./...    # Birim testleri
-go build ./...    # Artefakt
+go run ./cmd/dumb-server    # run locally
+go test ./...               # unit tests
+go build ./...              # build
 ```
 
-## QA otomasyonu
+## QA
 
-UI testi yok (qa=none — bilinçli karar, bkz. workspace ADR-0001). Kapı yalnız birim testlerini koşar.
+No UI tests (qa=none, a deliberate decision). The gate runs the unit tests only.
 
-## Skill'ler
+## Skills
 
-| Skill | Ne yapar |
+| Skill | What it does |
 |---|---|
-| `/core-build ` | Kapı yeşilse artefakt üretir ve DURUR (yüklemez/deploy etmez) |
+| `/core-build` | Builds the artefact if the gate is green, then STOPS (no upload, no deploy) |
 
-### Bakım kuralı — yeni ekleme yaparken bunları da güncelle (ZORUNLU)
+### Maintenance rule — when adding things, update these too
 
-- **Yeni skill:** `.agents/skills/core-<ad>/SKILL.md` yaz (önek zorunlu) →
-  cheat-sheet'e satır → bu tabloya satır → workspace kökünden symlink (`.agents/skills/<ad>` → `../../core/.agents/skills/<ad>`).
-- **Yeni UI testi:** yalnız test dizinine dosya ekle — koşum script'i otomatik bulur,
-  script'i ELLE değiştirme.
-- **Build adımı/imza değişirken:** `core-build` skill'ini ve `build_cmd`'yi
-  (`workspace.config.json`) güncel tut.
+- **New skill:** write `.agents/skills/core-<name>/SKILL.md` (prefix required) → add a line to
+  `.claude/session-commands.txt` → add a row to the table above.
+- **Build step changes:** keep the `core-build` skill and `build_cmd` in the workspace config
+  in sync.
 
-## Global kurallar (workspace'ten — bilinçli tekrar)
+## Global rules
 
-- **Yayınlama yalnız açık komutla.** Build artefakt üretir ve durur; push/deploy/store
-  yükleme yalnız kullanıcının açık komutuyla.
-- **Doğrulanabilir hedef.** Hata → önce onu üreten test. UI değişikliği → ekran görüntüsü.
-  İkinci düzeltme de tutmadıysa üçüncü yama yok: kök neden.
-- **Kayıt:** Bu dizinde açılan oturum workspace kök `CHANGELOG.md`'sine DOKUNMAZ; kayıt bu repo'nun git geçmişi ve `TODO.md`'sidir (her madde doğrulanabilir; yapılmayanlar da yazılır).
+- **Publishing only on explicit command.** A build produces an artefact and stops; push,
+  deploy and release happen only when the user says so.
+- **Verifiable goals.** A bug gets a test that reproduces it first. If a second fix fails,
+  there is no third patch: find the root cause.
+- **Record keeping:** a session opened in this directory records its work in this
+  repository's git history and `TODO.md` — every item verifiable, and what was not done is
+  written down too.
