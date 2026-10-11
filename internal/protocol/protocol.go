@@ -27,6 +27,8 @@ const (
 // MaxDeadlineMS bounds SubmitRequest.DeadlineMS.
 const MaxDeadlineMS = 600000
 
+const MaxNumPredict = 128
+
 type Error struct {
 	Error string `json:"error"`
 }
@@ -72,6 +74,7 @@ type SubmitRequest struct {
 	Prompt     string `json:"prompt"`
 	System     string `json:"system,omitempty"`
 	Format     string `json:"format,omitempty"`
+	NumPredict int    `json:"num_predict,omitempty"`
 	DeadlineMS int    `json:"deadline_ms"`
 }
 
@@ -83,6 +86,7 @@ type Assignment struct {
 	Prompt         string    `json:"prompt"`
 	System         string    `json:"system,omitempty"`
 	Format         string    `json:"format,omitempty"`
+	NumPredict     int       `json:"num_predict"`
 }
 
 type ResultRequest struct {

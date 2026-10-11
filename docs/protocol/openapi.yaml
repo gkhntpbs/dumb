@@ -180,7 +180,9 @@ paths:
       description: >
         Sent right after `GET /v1/jobs/next` returns a job, by workers whose
         hello listed the `ack` feature. Without it the lease is revoked when the
-        ack window ends. Acking twice is harmless.
+        ack window ends. Acking twice is harmless. While generating, workers check
+        the lease with this endpoint every 250ms and cancel generation on 409;
+        they also cancel at `lease_expires_at`.
       parameters:
         - $ref: "#/components/parameters/WorkerVersion"
         - $ref: "#/components/parameters/RequestID"
@@ -438,6 +440,12 @@ components:
           type: string
           enum: ["", json]
           description: "`json` asks the model for strict JSON output."
+        num_predict:
+          type: integer
+          minimum: 0
+          maximum: 128
+          default: 128
+          description: Maximum generated tokens; omitted or zero uses 128. The server rejects values above 128.
         deadline_ms:
           type: integer
           minimum: 1
@@ -445,7 +453,7 @@ components:
           description: Time from submission after which the result is useless.
     Assignment:
       type: object
-      required: [job_id, lease_id, lease_expires_at, model, prompt]
+      required: [job_id, lease_id, lease_expires_at, model, prompt, num_predict]
       properties:
         job_id: { type: string }
         lease_id: { type: string }
@@ -454,6 +462,11 @@ components:
         prompt: { type: string }
         system: { type: string }
         format: { type: string }
+        num_predict:
+          type: integer
+          minimum: 1
+          maximum: 128
+          description: Server-resolved maximum generated tokens, passed to Ollama options.num_predict.
     AckRequest:
       type: object
       required: [lease_id]

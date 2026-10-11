@@ -53,3 +53,66 @@ What the runs show:
 claim → ack → result → caller has the answer in 4.5 ms (limit 50 ms). The real
 worker sends the ack in parallel with the generation, so it adds no time to the
 job path at all; the launchd and dev runs served real jobs in 68–90 ms.
+
+## Bounded generation and lease cancellation — 2026-10-12
+
+`QA_OLLAMA=1 QA_DEADLINE_MS=10000 ./qa-automation/scripts/hedge-budget.sh`
+ran against the same intentional `127.0.0.1:11434` proxy and
+`smollm2:135m`, with one capacity-1 worker, an uncounted warm-up, and 20
+sequential requests. Requests omitted `num_predict`; the server resolved it
+to 128 and the worker passed it as Ollama `options.num_predict`.
+
+| Deadline | Done within 1.5 s | p50 | p95 | max |
+|---|---|---|---|---|
+| 10000 ms | 20/20 | 154 ms | 338 ms | 434 ms |
+
+All measured jobs returned HTTP 200 and `done`; worker generation/result
+latencies were 85–433 ms. The warm-up took 502 ms. The no-worker 503 path
+had median 0.4 ms / maximum 0.6 ms; after goodbye it had median 0.6 ms /
+maximum 0.7 ms.
+
+The contract accepts an optional `num_predict` from 1 to 128; omitted or
+zero selects 128, and negative or greater values return 400. The fixed
+server ceiling prevents the unlimited Ollama values from reaching a worker.
+128 is a bounded starting limit for this repository's measured short JSON
+workload, verified by the run above; it is not a general latency guarantee.
+A capped completion may be truncated, including incomplete JSON. The job
+still returns the generated text; callers must validate the output they need.
+
+Workers retain their assignment deadline context and recheck the lease with
+the existing idempotent ack endpoint every 250 ms while generating. This
+uses four checks per second per running job, below the default worker rate
+of 50 requests/s for the measured capacity of one. Lease-loss detection
+also depends on request latency; each ack retains its existing 5 s timeout,
+bounded by the job deadline. A transient ack failure is rechecked, and 409
+cancels generation and drops the stale result. Queue ack and completion now
+reject a past deadline even before the expiry timer runs.
+
+Regression verification:
+
+- `go test -count=1 -run 'TestGeneration|TestGenerateAlwaysBoundsTokens|TestGenerateCustomTokenLimit|TestGenerateDeadlineClosesRequest|TestExpiredLeaseRejectedBeforeTimer' ./internal/worker ./internal/ollama ./internal/queue ./internal/server`
+  passes with the implementation.
+- The new regression files were copied into an isolated `git archive 08c6782`
+  baseline from before this change and run with
+  `go test -count=1 -run 'TestGeneration|TestGenerateAlwaysBoundsTokens|TestGenerateCustomTokenLimit|TestExpiredLeaseRejectedBeforeTimer' ./internal/worker ./internal/ollama ./internal/queue ./internal/server`.
+  Exit status was 1. `TestGenerationStopsAfterLeaseLoss` reported generation
+  continuing after lease loss; `TestGenerationUsesAssignmentLimitAndDeadline`
+  reported the missing generation limit; `TestGenerateAlwaysBoundsTokens`
+  reported a request with no options; `TestExpiredLeaseRejectedBeforeTimer`
+  rejected neither an expired ack nor completion;
+  `TestGenerationLimitValidationAndAssignment` found missing assignment limits
+  and negative/above-ceiling values accepted as 202.
+  `TestGenerateCustomTokenLimit` reported zero instead of 17 and accepted -2.
+- `TestGenerateDeadlineClosesRequest` verifies the actual Ollama HTTP client's
+  connection is canceled at the deadline, using a local HTTP fixture that waits
+  for its request context to close. Deadline cancellation already existed;
+  this test protects it. Lease-loss cancellation is covered by a blocking
+  generator and an ack endpoint returning 204 then 409.
+- `npx @redocly/cli lint docs/protocol/openapi.yaml` (CLI 2.62.1) reports a valid
+  description with zero warnings; `go test -run TestTypesMatchSpec ./internal/protocol`
+  and `./qa-automation/scripts/build-gate.sh` pass.
+
+The live hedge run proves the bounded path meets the requested budget on
+this proxy/model. It did not force a deadline or revoked lease upstream;
+the proxy's propagation of a canceled client connection to its LAN Ollama
+request and the remote model's stopping behavior remain unmeasured.

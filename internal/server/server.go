@@ -441,6 +441,9 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request, p auth.Principal
 	case req.DeadlineMS < 1 || req.DeadlineMS > protocol.MaxDeadlineMS:
 		writeError(w, http.StatusBadRequest, "deadline_ms out of range")
 		return
+	case req.NumPredict < 0 || req.NumPredict > protocol.MaxNumPredict:
+		writeError(w, http.StatusBadRequest, "num_predict out of range")
+		return
 	case req.Format != "" && req.Format != "json":
 		writeError(w, http.StatusBadRequest, `format must be "" or "json"`)
 		return
@@ -449,6 +452,9 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request, p auth.Principal
 		s.reqLog(r).Info("no worker for model", "caller", p.ID, "model", req.Model)
 		writeError(w, http.StatusServiceUnavailable, "no online worker serves "+req.Model)
 		return
+	}
+	if req.NumPredict == 0 {
+		req.NumPredict = protocol.MaxNumPredict
 	}
 	id := s.q.Submit(req)
 	s.reqLog(r).Info("job submitted", "job_id", id, "caller", p.ID, "model", req.Model,

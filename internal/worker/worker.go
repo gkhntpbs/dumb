@@ -560,9 +560,6 @@ func isClosed(c <-chan struct{}) bool {
 	}
 }
 
-// ack acknowledges the assignment and reports whether the server refused it
-// (409: the lease is gone). A failed request is logged, not retried: the
-// result, if accepted, counts as an ack.
 func (w *Worker) ack(ctx context.Context, a protocol.Assignment) bool {
 	actx, cancel := context.WithTimeout(ctx, ackTimeout)
 	defer cancel()
@@ -590,21 +587,43 @@ func (w *Worker) runJob(ctx context.Context, a protocol.Assignment) {
 	// ack means the lease was revoked (it arrived too late): stop the job.
 	var revoked atomic.Bool
 	acked := make(chan struct{})
+	firstAck := make(chan struct{})
 	go func() {
 		defer close(acked)
-		if w.ack(jctx, a) {
+		refused := w.ack(jctx, a)
+		close(firstAck)
+		if refused {
 			revoked.Store(true)
 			cancel()
+			return
+		}
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-jctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if w.ack(jctx, a) {
+				revoked.Store(true)
+				cancel()
+				return
+			}
 		}
 	}()
-	out, err := w.gen.Generate(jctx, ollama.GenerateRequest{Model: a.Model, Prompt: a.Prompt, System: a.System, Format: a.Format})
+	limit := a.NumPredict
+	if limit < 1 || limit > protocol.MaxNumPredict {
+		limit = protocol.MaxNumPredict
+	}
+	out, err := w.gen.Generate(jctx, ollama.GenerateRequest{Model: a.Model, Prompt: a.Prompt, System: a.System, Format: a.Format, NumPredict: limit})
 	if err == nil {
-		<-acked // a result must not race ahead of a refused ack
+		<-firstAck
 	}
 	cancel()
 	<-acked
 	if revoked.Load() {
-		w.log.Printf("job %s: lease revoked before the ack arrived; dropped", a.JobID)
+		w.log.Printf("job %s: lease revoked; dropped", a.JobID)
 		return
 	}
 	res := protocol.ResultRequest{LeaseID: a.LeaseID, Output: out}

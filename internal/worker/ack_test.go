@@ -84,8 +84,8 @@ func TestWorkerAcksAssignments(t *testing.T) {
 	if code, st := submit(t, ts.URL, model); code != 200 || st.State != protocol.StateDone {
 		t.Fatalf("slow job: %d %+v", code, st)
 	}
-	if acks.Load() != 1 {
-		t.Fatalf("acks %d, want 1", acks.Load())
+	if acks.Load() < 1 {
+		t.Fatalf("acks %d, want at least 1", acks.Load())
 	}
 	if f, _ := features.Load().([]string); !slices.Equal(f, []string{protocol.FeatureAck}) {
 		t.Fatalf("hello features %v, want [ack]", f)

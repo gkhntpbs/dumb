@@ -117,6 +117,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, models []string, cap
 				Prompt:         j.req.Prompt,
 				System:         j.req.System,
 				Format:         j.req.Format,
+				NumPredict:     j.req.NumPredict,
 			}
 			q.mu.Unlock()
 			return a, nil
@@ -137,7 +138,7 @@ func (q *Queue) Complete(jobID, leaseID, workerID, output, errMsg string) error 
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	j, ok := q.jobs[jobID]
-	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID {
+	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID || !time.Now().Before(j.deadline) {
 		return ErrLease
 	}
 	q.endLeaseLocked(j)
@@ -156,7 +157,7 @@ func (q *Queue) Ack(jobID, leaseID, workerID string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	j, ok := q.jobs[jobID]
-	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID {
+	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID || !time.Now().Before(j.deadline) {
 		return ErrLease
 	}
 	j.acked = true

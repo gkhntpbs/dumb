@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/gkhntpbs/dumb/internal/protocol"
 )
 
 // DefaultURL is where Ollama listens out of the box.
@@ -194,10 +196,11 @@ func (c *Client) Pull(ctx context.Context, model string, progress func(Progress)
 
 // GenerateRequest is one non-streaming completion.
 type GenerateRequest struct {
-	Model  string
-	Prompt string
-	System string
-	Format string // "json" or ""
+	Model      string
+	Prompt     string
+	System     string
+	Format     string // "json" or ""
+	NumPredict int
 }
 
 // Generate runs one completion and returns the response text.
@@ -209,6 +212,13 @@ func (c *Client) Generate(ctx context.Context, r GenerateRequest) (string, error
 	if r.Format != "" {
 		body["format"] = r.Format
 	}
+	if r.NumPredict == 0 {
+		r.NumPredict = protocol.MaxNumPredict
+	}
+	if r.NumPredict < 1 || r.NumPredict > protocol.MaxNumPredict {
+		return "", errors.New("ollama: num_predict out of range")
+	}
+	body["options"] = map[string]int{"num_predict": r.NumPredict}
 	res, err := c.do(ctx, http.MethodPost, "/api/generate", body)
 	if err != nil {
 		return "", err
