@@ -8,6 +8,16 @@
 
 No UI tests (qa=none). Unit tests live next to the code, Go-style (`*_test.go`).
 
+The Go gate discovers `clients/typescript/qa_test.go`, which runs the caller package
+contract check, build, Node unit tests, tarball consumer checks and an integration
+against the actual Go server with local workers. Install its locked prerequisites
+with `npm ci --prefix clients/typescript --ignore-scripts` first. Missing Node.js
+or dev dependencies fail clearly; tests never fetch dependencies automatically.
+CI pins Node.js 26.0.0/npm 11.12.1 and installs them before the gate.
+
+Run caller-only checks with `npm --prefix clients/typescript run verify`; run the
+real server fixture with `go test -count=1 -v ./clients/typescript`.
+
 ## Rules
 
 - A new test is a new file; the runner scripts are never edited by hand to include it.
@@ -20,4 +30,6 @@ Added here as they are learned. The first place to look when diagnosing a red ga
 
 ## CI
 
-Not yet — `build-gate.sh` is the single entry point CI will run unchanged.
+`.github/workflows/ci.yaml` installs the locked caller tooling and runs
+`build-gate.sh` unchanged, then cross-platform vet and formatting checks.
+The remote CI run remains unverified; the complete gate runs locally.

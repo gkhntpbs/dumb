@@ -15,6 +15,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.0.0
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - name: Locked caller tooling
+        run: |
+          npm install --global npm@11.12.1
+          npm ci --prefix clients/typescript --ignore-scripts
       - name: Build gate
         run: ./qa-automation/scripts/build-gate.sh
       - name: Vet

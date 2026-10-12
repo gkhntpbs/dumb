@@ -1,0 +1,37 @@
+{
+  "name": "@dumb/caller",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reusable caller for Distributed User-owned Model Backend",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "check:contract": "node scripts/generate.mjs --check",
+    "build": "tsc -p tsconfig.json",
+    "test:unit": "node --test test/client.test.mjs",
+    "test:package": "node scripts/check-package.mjs",
+    "verify": "npm run check:contract && npm run build && npm run test:unit && npm run test:package",
+    "test": "npm run verify"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3",
+    "yaml": "2.9.1"
+  },
+  "packageManager": "npm@11.12.1"
+}

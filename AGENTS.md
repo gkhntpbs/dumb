@@ -32,6 +32,7 @@ GitHub Actions, not yet run for real. Next: see `TODO.md`.
 | `internal/update/updatetest/`, `internal/update/e2e/fakegh/` | Throwaway minisign keys/signatures and a fake GitHub Releases server for tests | test tooling |
 | `.goreleaser.yaml`, `.github/workflows/` | Release build (`release.yaml`, on `v*` tags) and CI (`ci.yaml`) | **ACTIVE** |
 | `docs/` | Protocol and design docs; `measurements.md` holds dated measurement runs | — |
+| `clients/typescript/` | Reusable Fetch-based caller package, generated contract types and standalone examples | **ACTIVE** |
 | `scripts/` | `dev.sh`: local dumb-server + one worker against the local Ollama | dev tooling |
 | `qa-automation/` | Build gate (unit tests only) | **ACTIVE** — follow `qa-automation/README.md` |
 
@@ -76,6 +77,11 @@ QA_LAUNCHD=1 ./qa-automation/scripts/launchd-e2e.sh   # macOS: real launchd agen
 go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean --skip=publish  # dry-run release into dist/
 ```
 
+The reusable caller package is documented in `clients/typescript/README.md`. Verify it with
+`npm --prefix clients/typescript run verify`; build it with
+`npm --prefix clients/typescript run build`. CI pins Node.js 26.0.0 and npm 11.12.1;
+the package supports Node.js 22+ and standard Fetch runtimes.
+
 ## Releases
 
 Details: `docs/release.md`. A release is cut **only on the user's explicit command** by pushing
@@ -88,7 +94,10 @@ The key pair is owned by the private `ops` repository. Worker exit code 4 = "res
 
 ## QA
 
-No UI tests (qa=none, a deliberate decision). The gate runs the unit tests only.
+No UI tests (qa=none, a deliberate decision). The gate runs Go unit tests, including
+`clients/typescript/qa_test.go`: generated-contract drift, TypeScript compilation, caller unit
+tests, packed independent consumers and real Go HTTP-server integration. Run
+`npm ci --prefix clients/typescript --ignore-scripts` first; the gate never downloads missing tools.
 
 ## Skills
 
