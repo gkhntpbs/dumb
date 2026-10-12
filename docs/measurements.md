@@ -116,3 +116,70 @@ The live hedge run proves the bounded path meets the requested budget on
 this proxy/model. It did not force a deadline or revoked lease upstream;
 the proxy's propagation of a canceled client connection to its LAN Ollama
 request and the remote model's stopping behavior remain unmeasured.
+
+## Hermetic Ollama recovery lab — 2026-10-12
+
+`./qa-automation/scripts/recovery-lab.sh` compiles three test binaries serially,
+then runs fresh `^TestRecovery` cases with `GOMAXPROCS=2`,
+`GOMEMLIMIT=256MiB`, `GOFLAGS=-p=1`, `-count=1`, `-parallel=1` and a 30 s
+per-binary timeout. `QA_OLLAMA=0` and `QA_LAUNCHD=0` prevent real opt-in tests.
+There are no VM/container images, official installers or model downloads.
+The intentional real 127.0.0.1:11434 proxy is never contacted.
+
+Measured with macOS `/usr/bin/time -l` on the same Apple M4 / 16 GB host:
+
+| Dedicated test process | Maximum RSS | Wall time | Swaps |
+|---|---|---|---|
+| `recoverylab.test` | 17,973,248 bytes (17.1 MiB) | 0.86 s | 0 |
+| `ollama.test` | 12,075,008 bytes (11.5 MiB) | 0.29 s | 0 |
+| `worker.test` | 16,384,000 bytes (15.6 MiB) | 0.46 s | 0 |
+
+The three compiled test binaries and build scratch occupied 31,668 KiB
+(30.9 MiB), measured with `du -sk`. The script removed only its created
+scratch directory on exit. Fixture file/symlink content after individual
+scenarios was 0–55 bytes; the instrumented peak was 263 bytes. These content
+counts exclude directory metadata, filesystem allocation blocks, binaries
+and the existing shared Go cache. The 64 KiB per-fixture content assertion is
+a test safeguard, not an OS disk quota. `GOMEMLIMIT` is a soft runtime target;
+compiler and full-gate Node processes are separate from these RSS measurements.
+
+The fresh dedicated run passed 49 leaf cases: 30 lab scenarios, 12 Ollama
+safety/regression cases and seven worker cases. Five further CLI provenance/
+setup leaf cases passed in the normal package suite. Coverage includes 20
+base fault scenarios, six owned API/tag fault variants, failed-cycle cooldown,
+cancellation, boundary refusal and root cleanup; real in-memory DUMB queue
+jobs complete after startup repair and after generation-500 restart while
+version/tags remain healthy. Configured and previously reachable implicit
+proxies are not installed over or restarted.
+
+Behavioral red-before-fix evidence:
+
+- On the pre-change `d8c66d7` implementation,
+  `TestRecoveryStartsMacCLIWithoutGUI` failed with `runs=[open -a Ollama]`
+  and no CLI start; `TestRecoveryWithdrawsUnavailableModels` failed because
+  unavailable models stayed advertised. Both now pass.
+- New safety tests initially failed for accepted raw parent archive traversal,
+  launch after cancellation, and starting two owned processes while replacing
+  the tracked handle. They now pass alongside symlink/duplicate/HTTPS-downgrade
+  and existing-file protections.
+- `TestRecoveryLabImplicitProxyIsRemembered` initially failed with one
+  simulated download/extract/start after loss of a healthy implicit proxy.
+  Successful model-list observation now records external ownership before
+  loss; the same test passes with no process/install operations.
+
+Two lab-only issues were found and corrected: hanging fake POST pulls left
+unread bodies and prevented server-side cancellation observation during
+cleanup, so the fixture drains bodies and has an explicit scoped shutdown
+signal; direct test binaries inherit `GOTMPDIR` paths containing repeated
+slashes, while `filepath.Join` cleaned the candidate install path, so the
+root prefix check rejected its own fixture. Diagnostic output proved the
+raw `T//...` versus cleaned `T/...` mismatch; fixture roots are canonicalized
+before guard comparison without loosening `os.Root` confinement.
+
+The final full gate passed with
+`GOMAXPROCS=2 GOMEMLIMIT=256MiB GOFLAGS=-p=1 QA_OLLAMA=0 QA_LAUNCHD=0 ./qa-automation/scripts/build-gate.sh`.
+Read the supported recovery envelope and remaining native-install/orphan/
+OS-notification gaps in `ollama-recovery.md`. The fixtures execute no actual
+installer, daemon or model; passing them does not verify native macOS focus,
+Gatekeeper or process-tree cleanup behavior. No real installation or proxy
+configuration was modified.

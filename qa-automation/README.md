@@ -4,6 +4,7 @@
 |---|---|
 | `scripts/unit-tests.sh` | Unit tests (`go test ./...`) |
 | `scripts/clean-results.sh [--dry-run]` | Removes test output |
+| `scripts/recovery-lab.sh` | Fresh serial Ollama recovery fault fixtures, bounded scratch, per-process macOS RSS; no real installers/models/11434 |
 | `scripts/build-gate.sh` | clean → unit tests (`QA_STRICT=1`); the gate in front of every build |
 
 No UI tests (qa=none). Unit tests live next to the code, Go-style (`*_test.go`).
@@ -17,6 +18,12 @@ CI pins Node.js 26.0.0/npm 11.12.1 and installs them before the gate.
 
 Run caller-only checks with `npm --prefix clients/typescript run verify`; run the
 real server fixture with `go test -count=1 -v ./clients/typescript`.
+
+The isolated recovery lab is described in `docs/ollama-recovery.md`; measured
+resources and behavioral red-before-fix evidence are in `docs/measurements.md`.
+Run `./qa-automation/scripts/recovery-lab.sh` for fresh cases, or run the complete
+gate with `GOMAXPROCS=2 GOMEMLIMIT=256MiB GOFLAGS=-p=1 QA_OLLAMA=0 QA_LAUNCHD=0 ./qa-automation/scripts/build-gate.sh`.
+The harness is for trusted fixture code, not an OS sandbox for untrusted programs.
 
 ## Rules
 

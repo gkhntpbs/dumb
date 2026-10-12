@@ -24,8 +24,9 @@ GitHub Actions, not yet run for real. Next: see `TODO.md`.
 | `internal/queue/` | In-memory job queue with leases | **ACTIVE** |
 | `internal/server/` | HTTP handlers for the protocol, rate limits (`ratelimit.go`), request-id logging | **ACTIVE** |
 | `internal/auth/` | `Authenticator` interface + `StaticTokens` reference (hash-only, revocable) | **ACTIVE** |
-| `internal/ollama/` | Loopback-only Ollama API client + detect / install / start (injectable seams) | **ACTIVE** |
+| `internal/ollama/` | Loopback-only API client, staged macOS install, owned CLI and bounded readiness recovery | **ACTIVE** |
 | `internal/worker/` | Agent loop: hello, long-poll, run job, post result | **ACTIVE** |
+| `internal/recoverylab/` | Scoped inert filesystem/API/command fault fixtures; no native installers or host Ollama contact | test tooling |
 | `internal/doctor/` | Readiness checks behind `dumb-worker doctor` | **ACTIVE** |
 | `internal/service/` | launchd / systemd (hardened system unit as `User=dumb`) / Windows service definitions and install — see `docs/service.md` | **ACTIVE** |
 | `internal/update/` | Self-updater: GitHub releases, minisign verification, atomic swap, probation / rollback. Worker only — the server must not import it | **ACTIVE** |
@@ -76,6 +77,11 @@ QA_OLLAMA=1 ./qa-automation/scripts/hedge-budget.sh   # caller latency vs a 1.5 
 QA_LAUNCHD=1 ./qa-automation/scripts/launchd-e2e.sh   # macOS: real launchd agent install, kill -9, exit-4 update restart, uninstall
 go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean --skip=publish  # dry-run release into dist/
 ```
+
+Ollama recovery and the isolated fault lab are documented in `docs/ollama-recovery.md`.
+Run fresh low-resource cases with `./qa-automation/scripts/recovery-lab.sh`; no
+real Ollama, app or service is touched. `run` shares the bounded readiness manager
+with `setup`; explicit endpoints and existing unmanaged APIs remain protected.
 
 The reusable caller package is documented in `clients/typescript/README.md`. Verify it with
 `npm --prefix clients/typescript run verify`; build it with

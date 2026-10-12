@@ -33,7 +33,11 @@ const (
 func fakeOllama(t *testing.T) *ollama.Client {
 	t.Helper()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/generate" { // no /api/tags: the configured models are announced as is
+		if r.URL.Path == "/api/tags" {
+			json.NewEncoder(w).Encode(map[string]any{"models": []map[string]string{{"name": model}, {"name": "broken"}}})
+			return
+		}
+		if r.URL.Path != "/api/generate" {
 			http.NotFound(w, r)
 			return
 		}

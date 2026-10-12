@@ -32,6 +32,13 @@ func IsLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+type APIError struct {
+	Status  int
+	Message string
+}
+
+func (e *APIError) Error() string { return fmt.Sprintf("ollama: HTTP %d: %s", e.Status, e.Message) }
+
 type Client struct {
 	base *url.URL
 	http *http.Client
@@ -40,6 +47,13 @@ type Client struct {
 // New returns a client for baseURL ("" means DefaultURL). It refuses any
 // non-loopback host.
 func New(baseURL string) (*Client, error) {
+	return NewWithTransport(baseURL, http.DefaultTransport)
+}
+
+func NewWithTransport(baseURL string, transport http.RoundTripper) (*Client, error) {
+	if transport == nil {
+		return nil, errors.New("ollama: HTTP transport is required")
+	}
 	if baseURL == "" {
 		baseURL = DefaultURL
 	}
@@ -53,7 +67,7 @@ func New(baseURL string) (*Client, error) {
 	if !IsLoopbackHost(u.Hostname()) {
 		return nil, fmt.Errorf("ollama: %q is not a loopback address; Ollama must only be used on 127.0.0.1", baseURL)
 	}
-	hc := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+	hc := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("ollama: redirects are not followed")
 	}}
 	return &Client{base: u, http: hc}, nil
@@ -97,9 +111,9 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 			Error string `json:"error"`
 		}
 		if json.Unmarshal(b, &e) == nil && e.Error != "" {
-			return nil, fmt.Errorf("ollama: %s %s: %d: %s", method, path, res.StatusCode, e.Error)
+			return nil, &APIError{Status: res.StatusCode, Message: e.Error}
 		}
-		return nil, fmt.Errorf("ollama: %s %s: %d", method, path, res.StatusCode)
+		return nil, &APIError{Status: res.StatusCode, Message: res.Status}
 	}
 	return res, nil
 }
@@ -120,6 +134,9 @@ func (c *Client) Version(ctx context.Context) (string, error) {
 	}
 	if err := c.getJSON(ctx, "/api/version", &v); err != nil {
 		return "", err
+	}
+	if v.Version == "" {
+		return "", errors.New("ollama: invalid version response")
 	}
 	return v.Version, nil
 }

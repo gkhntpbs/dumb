@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 )
 
@@ -52,32 +53,38 @@ func (ExecRunner) Start(name string, args ...string) error {
 
 // System holds every seam Detect, Install and Start use to touch the machine.
 type System struct {
-	GOOS         string
-	Home         string
-	LocalAppData string // Windows %LOCALAPPDATA%
-	LookPath     func(string) (string, error)
-	Stat         func(string) (fs.FileInfo, error)
-	Writable     func(dir string) bool
-	Download     func(ctx context.Context, url, dst string) error
-	TempDir      func() (string, error)
-	Runner       Runner
-	Client       *Client
+	GOOS            string
+	Home            string
+	LocalAppData    string // Windows %LOCALAPPDATA%
+	LookPath        func(string) (string, error)
+	Stat            func(string) (fs.FileInfo, error)
+	Writable        func(dir string) bool
+	Download        func(ctx context.Context, url, dst string) error
+	TempDir         func() (string, error)
+	Runner          Runner
+	Client          *Client
+	FS              InstallFileSystem
+	ValidateArchive func(string) error
+	processMu       sync.Mutex
+	process         Process
 }
 
 // NewSystem returns a System wired to the real machine.
 func NewSystem(c *Client) *System {
 	home, _ := os.UserHomeDir()
 	return &System{
-		GOOS:         runtime.GOOS,
-		Home:         home,
-		LocalAppData: os.Getenv("LOCALAPPDATA"),
-		LookPath:     exec.LookPath,
-		Stat:         os.Stat,
-		Writable:     dirWritable,
-		Download:     download,
-		TempDir:      func() (string, error) { return os.MkdirTemp("", "dumb-ollama-") },
-		Runner:       ExecRunner{},
-		Client:       c,
+		GOOS:            runtime.GOOS,
+		Home:            home,
+		LocalAppData:    os.Getenv("LOCALAPPDATA"),
+		LookPath:        exec.LookPath,
+		Stat:            os.Stat,
+		Writable:        dirWritable,
+		Download:        download,
+		TempDir:         func() (string, error) { return os.MkdirTemp("", "dumb-ollama-") },
+		Runner:          ExecRunner{},
+		Client:          c,
+		FS:              OSInstallFileSystem{},
+		ValidateArchive: ValidateMacArchive,
 	}
 }
 
@@ -139,22 +146,7 @@ func (s *System) Install(ctx context.Context) error {
 	case "linux":
 		return s.Runner.Run(ctx, "sh", "-c", LinuxInstallScript)
 	case "darwin":
-		tmp, err := s.TempDir()
-		if err != nil {
-			return err
-		}
-		zip := filepath.Join(tmp, "Ollama-darwin.zip")
-		if err := s.Download(ctx, MacOSDownloadURL, zip); err != nil {
-			return err
-		}
-		dest := "/Applications"
-		if !s.Writable(dest) {
-			dest = filepath.Join(s.Home, "Applications")
-		}
-		if err := s.Runner.Run(ctx, "ditto", "-xk", zip, dest); err != nil {
-			return err
-		}
-		return s.Runner.Run(ctx, "open", "-a", filepath.Join(dest, "Ollama.app"))
+		return s.installMac(ctx)
 	case "windows":
 		tmp, err := s.TempDir()
 		if err != nil {
@@ -172,6 +164,9 @@ func (s *System) Install(ctx context.Context) error {
 
 // Start starts an installed Ollama that is not running.
 func (s *System) Start(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	d := s.Detect(ctx)
 	switch {
 	case d.Reachable:
@@ -181,7 +176,30 @@ func (s *System) Start(ctx context.Context) error {
 	}
 	switch s.GOOS {
 	case "darwin":
-		return s.Runner.Run(ctx, "open", "-a", "Ollama")
+		s.processMu.Lock()
+		defer s.processMu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if s.process != nil && s.process.Running() {
+			return nil
+		}
+		binary := d.Path
+		if filepath.Ext(binary) == ".app" {
+			binary = filepath.Join(binary, "Contents", "Resources", "ollama")
+		}
+		if _, err := s.Stat(binary); err != nil {
+			return err
+		}
+		if runner, ok := s.Runner.(ProcessRunner); ok {
+			process, err := runner.StartManaged(binary, "serve")
+			if err != nil {
+				return err
+			}
+			s.process = process
+			return nil
+		}
+		return s.Runner.Start(binary, "serve")
 	case "linux":
 		if err := s.Runner.Run(ctx, "systemctl", "start", "ollama"); err == nil {
 			return nil
@@ -219,6 +237,13 @@ func dirWritable(dir string) bool {
 }
 
 func download(ctx context.Context, url, dst string) error {
+	return downloadWithTransport(ctx, url, dst, http.DefaultTransport)
+}
+
+func downloadWithTransport(ctx context.Context, url, dst string, transport http.RoundTripper) error {
+	if transport == nil {
+		return errors.New("ollama: installer HTTP transport is required")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -226,7 +251,16 @@ func download(ctx context.Context, url, dst string) error {
 	if req.URL.Scheme != "https" {
 		return fmt.Errorf("ollama: refusing non-HTTPS download %s", url)
 	}
-	res, err := http.DefaultClient.Do(req)
+	client := &http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "https" {
+			return errors.New("ollama: installer redirect must use HTTPS")
+		}
+		if len(via) >= 10 {
+			return errors.New("ollama: too many installer redirects")
+		}
+		return nil
+	}}
+	res, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -234,13 +268,22 @@ func download(ctx context.Context, url, dst string) error {
 	if res.StatusCode != http.StatusOK {
 		return fmt.Errorf("ollama: download %s: %s", url, res.Status)
 	}
-	f, err := os.Create(dst)
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, res.Body); err != nil {
+	if res.ContentLength > MaxInstallerBytes {
 		f.Close()
-		return err
+		os.Remove(dst)
+		return errors.New("ollama: installer exceeds download limit")
+	}
+	if size, err := io.Copy(f, io.LimitReader(res.Body, MaxInstallerBytes+1)); err != nil || size > MaxInstallerBytes {
+		f.Close()
+		os.Remove(dst)
+		if err != nil {
+			return err
+		}
+		return errors.New("ollama: installer exceeds download limit")
 	}
 	return f.Close()
 }

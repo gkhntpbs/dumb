@@ -198,7 +198,6 @@ func TestInstallPerOS(t *testing.T) {
 		downloads []string
 	}{
 		{"linux", []string{"sh -c " + LinuxInstallScript}, nil},
-		{"darwin", []string{"ditto -xk /tmp/x/Ollama-darwin.zip /home/u/Applications", "open -a /home/u/Applications/Ollama.app"}, []string{MacOSDownloadURL + " -> /tmp/x/Ollama-darwin.zip"}},
 		{"windows", []string{"/tmp/x/OllamaSetup.exe /VERYSILENT"}, []string{WindowsDownloadURL + " -> /tmp/x/OllamaSetup.exe"}},
 	}
 	for _, c := range cases {
@@ -210,11 +209,9 @@ func TestInstallPerOS(t *testing.T) {
 			t.Errorf("%s: runs %q downloads %q", c.goos, r.runs, *dl)
 		}
 	}
-	s, r, _ := fakeSystem("darwin", nil, nil)
-	s.Writable = func(string) bool { return true }
-	s.Install(context.Background())
-	if r.runs[0] != "ditto -xk /tmp/x/Ollama-darwin.zip /Applications" {
-		t.Errorf("writable /Applications: %q", r.runs)
+	s, _, _ := fakeSystem("darwin", nil, nil)
+	if err := s.Install(context.Background()); err == nil {
+		t.Fatal("macOS install accepted missing filesystem seam")
 	}
 	if s, _, _ := fakeSystem("plan9", nil, nil); s.Install(context.Background()) == nil {
 		t.Error("unsupported OS installed")
@@ -225,8 +222,8 @@ func TestStart(t *testing.T) {
 	down, _ := New("http://127.0.0.1:1")
 	_, up := fakeOllama(t, nil)
 
-	s, r, _ := fakeSystem("darwin", []string{"/Applications/Ollama.app"}, down)
-	if err := s.Start(context.Background()); err != nil || !slices.Equal(r.runs, []string{"open -a Ollama"}) {
+	s, r, _ := fakeSystem("darwin", []string{"/Applications/Ollama.app", "/Applications/Ollama.app/Contents/Resources/ollama"}, down)
+	if err := s.Start(context.Background()); err != nil || !slices.Equal(r.starts, []string{"/Applications/Ollama.app/Contents/Resources/ollama serve"}) || len(r.runs) != 0 {
 		t.Errorf("darwin: %v %q", err, r.runs)
 	}
 	s, r, _ = fakeSystem("linux", []string{"/usr/bin/ollama"}, down)

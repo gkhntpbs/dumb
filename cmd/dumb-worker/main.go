@@ -85,6 +85,8 @@ type config struct {
 	logDir                               string // service: macOS log directory
 	capacity                             int
 	system                               bool // service: Linux system unit
+	ollamaConfigured                     bool
+	newSystem                            func(*ollama.Client) *ollama.System
 }
 
 func (c *config) modelList() []string {
@@ -105,7 +107,7 @@ func env(k, def string) string {
 }
 
 func parseFlags(name string, args []string, stderr io.Writer) (*config, []string, error) {
-	c := &config{}
+	c := &config{ollamaConfigured: os.Getenv("DUMB_OLLAMA") != ""}
 	fs := flag.NewFlagSet("dumb-worker "+name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	capDefault, err := strconv.Atoi(env("DUMB_CAPACITY", "1"))
@@ -126,6 +128,11 @@ func parseFlags(name string, args []string, stderr io.Writer) (*config, []string
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, err
 	}
+	fs.Visit(func(flag *flag.Flag) {
+		if flag.Name == "ollama" {
+			c.ollamaConfigured = true
+		}
+	})
 	if c.channel != update.ChannelStable && c.channel != update.ChannelBeta {
 		return nil, nil, fmt.Errorf("channel %q: want stable or beta", c.channel)
 	}
@@ -182,9 +189,31 @@ func cmdRun(ctx context.Context, c *config, logger *log.Logger) int {
 		logger.Print(err)
 		return exitError
 	}
+	client, err := ollama.New(c.ollamaURL)
+	if err != nil {
+		logger.Print(err)
+		return exitError
+	}
+	system := ollama.NewSystem(client)
+	if c.newSystem != nil {
+		system = c.newSystem(client)
+	}
+	recovery, err := ollama.NewRecovery(ollama.RecoveryConfig{System: system, Models: c.modelList(), External: c.ollamaConfigured, Logger: logger})
+	if err != nil {
+		logger.Print(err)
+		return exitError
+	}
+	defer func() {
+		stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := recovery.Close(stop); err != nil {
+			logger.Print(err)
+		}
+	}()
 	wcfg := worker.Config{
 		ServerURL: c.server, Token: token, Models: c.modelList(), Capacity: c.capacity,
 		OllamaURL: c.ollamaURL, Version: version, Logger: logger,
+		Ollama: system.Client, Recovery: recovery, ModelCheck: 5 * time.Second,
 	}
 	if _, err := worker.New(wcfg); err != nil { // validate before touching updates
 		logger.Print(err)
@@ -267,54 +296,27 @@ func cmdSetup(ctx context.Context, c *config, stdout io.Writer, logger *log.Logg
 		logger.Print(err)
 		return exitError
 	}
-	sys := ollama.NewSystem(oc)
-	d := sys.Detect(ctx)
-	if !d.Installed {
-		fmt.Fprintln(stdout, "Ollama not found; installing it the official way...")
-		if err := sys.Install(ctx); err != nil {
-			logger.Print("install: ", err)
-			return exitError
-		}
-	} else {
-		fmt.Fprintf(stdout, "Ollama found: %s\n", strings.TrimSpace(d.Path+" "+d.Version))
+	system := ollama.NewSystem(oc)
+	if c.newSystem != nil {
+		system = c.newSystem(oc)
 	}
-	if !d.Reachable {
-		fmt.Fprintln(stdout, "Starting Ollama...")
-		if err := sys.Start(ctx); err != nil {
-			logger.Print("start: ", err)
-			return exitError
-		}
-	}
-	wctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	v, err := sys.WaitReachable(wctx, time.Second)
-	cancel()
+	recovery, err := ollama.NewRecovery(ollama.RecoveryConfig{System: system, Models: c.modelList(), External: c.ollamaConfigured, Logger: logger})
 	if err != nil {
 		logger.Print(err)
 		return exitError
 	}
-	fmt.Fprintf(stdout, "Ollama %s is reachable on loopback.\n", v)
-	for _, m := range c.modelList() {
-		fmt.Fprintf(stdout, "Pulling %s...\n", m)
-		lastPct, lastStatus := -1, ""
-		err := oc.Pull(ctx, m, func(p ollama.Progress) {
-			if p.Total > 0 {
-				if pct := int(p.Completed * 100 / p.Total); pct/10 != lastPct/10 {
-					fmt.Fprintf(stdout, "  %s %d%%\n", p.Status, pct)
-					lastPct = pct
-				}
-				return
-			}
-			if p.Status != lastStatus {
-				fmt.Fprintf(stdout, "  %s\n", p.Status)
-				lastStatus, lastPct = p.Status, -1
-			}
-		})
-		if err != nil {
+	defer func() {
+		stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := recovery.Close(stop); err != nil {
 			logger.Print(err)
-			return exitError
 		}
+	}()
+	if err := recovery.Ensure(ctx); err != nil {
+		logger.Print(err)
+		return exitError
 	}
-	fmt.Fprintln(stdout, "Setup complete. Next: dumb-worker doctor")
+	fmt.Fprintln(stdout, "Setup complete. Next: dumb-worker run")
 	return exitOK
 }
 
@@ -342,9 +344,7 @@ func cmdService(ctx context.Context, c *config, sub string, stdout io.Writer, lo
 			return exitError
 		}
 	}
-	if c.ollamaURL != ollama.DefaultURL {
-		envs["DUMB_OLLAMA"] = c.ollamaURL
-	}
+	c.addOllamaEnvironment(envs)
 	if c.channel != update.ChannelStable {
 		envs["DUMB_CHANNEL"] = c.channel
 	}
@@ -394,4 +394,10 @@ func cmdService(ctx context.Context, c *config, sub string, stdout io.Writer, lo
 	}
 	logger.Printf("unknown service command %q (install, uninstall, print)", sub)
 	return exitUsage
+}
+
+func (c *config) addOllamaEnvironment(envs map[string]string) {
+	if c.ollamaConfigured || c.ollamaURL != ollama.DefaultURL {
+		envs["DUMB_OLLAMA"] = c.ollamaURL
+	}
 }

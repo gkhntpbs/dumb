@@ -51,7 +51,11 @@ type ModelLister interface {
 // DefaultModelCheck is how often the worker re-lists Ollama's models.
 const DefaultModelCheck = time.Minute
 
+type ReadinessRecovery interface{ Ensure(context.Context) error }
+
 type Config struct {
+	Recovery  ReadinessRecovery
+	Transport http.RoundTripper
 	ServerURL string   // https, or http on a loopback host
 	Token     string   // see ReadTokenFile
 	Models    []string // configured; hello announces those Ollama actually has
@@ -122,8 +126,10 @@ type Worker struct {
 	changed chan struct{} // closed and replaced whenever models changes
 
 	// draining is cancelled by Drain: no new claims, running jobs finish.
-	draining context.Context
-	drain    context.CancelFunc
+	draining   context.Context
+	drain      context.CancelFunc
+	readiness  chan struct{}
+	authorized atomic.Bool
 }
 
 func New(cfg Config) (*Worker, error) {
@@ -162,16 +168,21 @@ func New(cfg Config) (*Worker, error) {
 	if cfg.ModelCheck <= 0 {
 		cfg.ModelCheck = DefaultModelCheck
 	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
-	tr.TLSHandshakeTimeout = 10 * time.Second
+	var transport http.RoundTripper = cfg.Transport
+	if transport == nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+		tr.TLSHandshakeTimeout = 10 * time.Second
+		transport = tr
+	}
 	draining, drain := context.WithCancel(context.Background())
 	return &Worker{
 		draining: draining, drain: drain,
 		cfg: cfg, base: base, gen: gen, log: cfg.Logger,
 		// Per-request deadlines come from contexts: a long-poll needs more than other calls.
-		http:    &http.Client{Transport: tr},
-		backoff: time.Second, maxBack: time.Minute,
+		http:      &http.Client{Transport: transport},
+		readiness: make(chan struct{}, 1),
+		backoff:   time.Second, maxBack: time.Minute,
 		maxWait: 25 * time.Second,
 		models:  slices.Clone(cfg.Models),
 		changed: make(chan struct{}),
@@ -202,6 +213,9 @@ func (w *Worker) present(ctx context.Context) ([]string, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if observer, ok := w.cfg.Recovery.(interface{ ObserveReady() }); ok {
+		observer.ObserveReady()
+	}
 	var out []string
 	for _, m := range w.cfg.Models {
 		if ollama.HasModel(have, m) {
@@ -220,6 +234,7 @@ func (w *Worker) logNoModel(have []string) {
 // credential (401) or an outdated version (426), so updates and probation keep
 // working. One attempt; a transient failure is logged and retried next tick.
 func (w *Worker) checkIn(ctx context.Context) error {
+	w.authorized.Store(false)
 	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	code, err := w.call(rctx, http.MethodGet, "/v1/workers/me", "", nil, nil)
 	cancel()
@@ -227,6 +242,7 @@ func (w *Worker) checkIn(ctx context.Context) error {
 	case fatal(err):
 		return err
 	case err == nil && code == http.StatusOK:
+		w.authorized.Store(true)
 		if w.cfg.OnHello != nil {
 			w.cfg.OnHello()
 		}
@@ -240,54 +256,94 @@ func (w *Worker) checkIn(ctx context.Context) error {
 	return nil
 }
 
-// watchModels re-lists Ollama's models every ModelCheck. When the set of
-// configured models present changes it says hello again; when none is left it
-// stops claiming (setModels(nil) aborts the polls in flight). A failed listing
-// changes nothing: Ollama being briefly down is not a model change.
+func (w *Worker) unavailable(ctx context.Context) {
+	w.mu.Lock()
+	hadModels := len(w.models) > 0
+	if hadModels {
+		w.models = nil
+		close(w.changed)
+		w.changed = make(chan struct{})
+	}
+	w.mu.Unlock()
+	if hadModels {
+		w.goodbye(ctx)
+	}
+}
+
 func (w *Worker) watchModels(ctx context.Context) error {
-	t := time.NewTicker(w.cfg.ModelCheck)
-	defer t.Stop()
-	listFailing := false
+	ticker := time.NewTicker(w.cfg.ModelCheck)
+	defer ticker.Stop()
+	immediate := w.cfg.Recovery != nil
+	forced := false
 	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-w.draining.Done():
-			return nil
-		case <-t.C:
-		}
-		m, have, err := w.present(ctx)
-		if err != nil {
-			if !listFailing && ctx.Err() == nil {
-				w.log.Printf("listing Ollama models failed (keeping the announced ones): %v", err)
+		if !immediate {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-w.draining.Done():
+				return nil
+			case <-w.readiness:
+				forced = true
+			case <-ticker.C:
 			}
-			listFailing = true
+		}
+		immediate = false
+		models, have, err := w.present(ctx)
+		repair := forced || err != nil || len(models) < len(w.cfg.Models)
+		forced = false
+		if err != nil || (repair && w.cfg.Recovery != nil) {
+			w.unavailable(ctx)
+		}
+		if repair && w.cfg.Recovery != nil {
+			if err := w.checkIn(ctx); err != nil {
+				return err
+			}
+			if !w.authorized.Load() {
+				continue
+			}
+			repairCtx, cancel := context.WithCancel(ctx)
+			stop := context.AfterFunc(w.draining, cancel)
+			err = w.cfg.Recovery.Ensure(repairCtx)
+			stop()
+			cancel()
+			if ctx.Err() != nil || w.draining.Err() != nil {
+				return nil
+			}
+			if err != nil {
+				w.log.Printf("Ollama unavailable; recovery deferred: %v", err)
+				continue
+			}
+			models, have, err = w.present(ctx)
+		}
+		if err != nil {
+			w.unavailable(ctx)
+			w.log.Printf("listing Ollama models failed; not claiming jobs: %v", err)
+			if err := w.checkIn(ctx); err != nil {
+				return err
+			}
 			continue
 		}
-		listFailing = false
-		cur, _ := w.current()
-		if slices.Equal(m, cur) {
-			if len(m) == 0 {
+		current, _ := w.current()
+		if slices.Equal(models, current) {
+			if len(models) == 0 {
 				if err := w.checkIn(ctx); err != nil {
 					return err
 				}
 			}
 			continue
 		}
-		if len(m) == 0 {
+		if len(models) == 0 {
 			w.logNoModel(have)
-			w.setModels(nil)
-			w.goodbye(ctx) // nothing to serve: callers should not wait for us
+			w.unavailable(ctx)
 			continue
 		}
-		w.log.Printf("models present changed from %v to %v; saying hello again", cur, m)
-		if err := w.hello(ctx, m); err != nil {
+		if err := w.hello(ctx, models); err != nil {
 			if fatal(err) {
 				return err
 			}
 			return nil
 		}
-		w.setModels(m)
+		w.setModels(models)
 	}
 }
 
@@ -438,12 +494,18 @@ func (w *Worker) Drain() { w.drain() }
 // Only the configured models Ollama actually has are announced, re-checked
 // every ModelCheck; with none present the worker waits without claiming.
 func (w *Worker) Run(ctx context.Context) error {
+	if w.cfg.Recovery != nil {
+		if err := w.checkIn(ctx); err != nil {
+			return err
+		}
+	}
 	models := slices.Clone(w.cfg.Models)
 	if w.cfg.Lister != nil {
 		m, have, err := w.present(ctx)
 		switch {
 		case err != nil:
-			w.log.Printf("listing Ollama models failed (announcing the configured ones): %v", err)
+			w.log.Printf("listing Ollama models failed; not announcing unavailable models: %v", err)
+			models = nil
 		case len(m) == 0:
 			w.logNoModel(have)
 			models = nil
@@ -622,6 +684,16 @@ func (w *Worker) runJob(ctx context.Context, a protocol.Assignment) {
 	}
 	cancel()
 	<-acked
+	if err != nil && ctx.Err() == nil && !errors.Is(err, context.DeadlineExceeded) && !revoked.Load() {
+		if recovery, ok := w.cfg.Recovery.(interface{ ReportFailure(error) }); ok {
+			recovery.ReportFailure(err)
+		}
+		w.unavailable(ctx)
+		select {
+		case w.readiness <- struct{}{}:
+		default:
+		}
+	}
 	if revoked.Load() {
 		w.log.Printf("job %s: lease revoked; dropped", a.JobID)
 		return
