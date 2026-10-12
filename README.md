@@ -40,3 +40,13 @@ secrets, signing keys and deployment details are never part of it.
 ## License
 
 MIT
+
+## macOS menu bar
+
+Build a local menu-only application with `./scripts/build-macos-app.sh`. It uses
+a native accessory helper with graceful Pause, Resume and Quit; no application
+windows or Dock icon. Configuration still uses the existing flags/environment
+and token file; double-clicking an unconfigured bundle is not onboarding.
+Unbundled macOS development/CLI runs explicitly use `-headless`. See
+[macos-menu-bar.md](docs/macos-menu-bar.md) for lifecycle, verification and
+pending signed distribution/visual acceptance.

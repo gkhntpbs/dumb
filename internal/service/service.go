@@ -104,11 +104,7 @@ func Plist(c Config) string {
 	kv := func(k, v string) { fmt.Fprintf(&b, "\t<key>%s</key>\n\t<string>%s</string>\n", k, xmlText(v)) }
 	kv("Label", c.label())
 	fmt.Fprintf(&b, "\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>%s</string>\n\t\t<string>run</string>\n\t</array>\n", xmlText(c.Binary))
-	// KeepAlive restarts every exit, including 4 (restart after an update or
-	// rollback). launchd respawns at once when the job ran at least
-	// ThrottleInterval seconds, otherwise after the rest of it. The worker no
-	// longer exits on 426, so an outdated worker does not spin.
-	b.WriteString("\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<true/>\n")
+	b.WriteString("\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n")
 	b.WriteString("\t<key>ThrottleInterval</key>\n\t<integer>10</integer>\n")
 	if len(c.Env) > 0 {
 		b.WriteString("\t<key>EnvironmentVariables</key>\n\t<dict>\n")

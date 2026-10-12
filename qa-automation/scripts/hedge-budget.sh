@@ -49,7 +49,7 @@ body() { printf '{"model":"%s","prompt":"Return a JSON object with the field n s
 echo "═══ 503 with no worker ever online ═══"
 for i in 1 2 3 4 5; do post "$(body 0)"; done | tee "$T/503a"
 
-"$T/dumb-worker" run -server "$BASE" -token-file "$T/wtoken" -models "$MODEL" > "$T/worker.log" 2>&1 &
+"$T/dumb-worker" run -headless -server "$BASE" -token-file "$T/wtoken" -models "$MODEL" > "$T/worker.log" 2>&1 &
 WPID=$!; PIDS+=($WPID)
 for _ in $(seq 100); do grep -q "hello: worker" "$T/worker.log" && break; sleep 0.1; done
 grep -q "hello: worker" "$T/worker.log" || { cat "$T/worker.log"; echo "worker never said hello"; exit 1; }

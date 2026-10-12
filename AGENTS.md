@@ -27,6 +27,7 @@ GitHub Actions, not yet run for real. Next: see `TODO.md`.
 | `internal/ollama/` | Loopback-only API client, staged macOS install, owned CLI and bounded readiness recovery | **ACTIVE** |
 | `internal/worker/` | Agent loop: hello, long-poll, run job, post result | **ACTIVE** |
 | `internal/recoverylab/` | Scoped inert filesystem/API/command fault fixtures; no native installers or host Ollama contact | test tooling |
+| `internal/menubar/`, `macos/` | Versioned stdio menu helper and native AppKit source; no inbound listener | **ACTIVE** |
 | `internal/doctor/` | Readiness checks behind `dumb-worker doctor` | **ACTIVE** |
 | `internal/service/` | launchd / systemd (hardened system unit as `User=dumb`) / Windows service definitions and install — see `docs/service.md` | **ACTIVE** |
 | `internal/update/` | Self-updater: GitHub releases, minisign verification, atomic swap, probation / rollback. Worker only — the server must not import it | **ACTIVE** |
@@ -100,7 +101,7 @@ The key pair is owned by the private `ops` repository. Worker exit code 4 = "res
 
 ## QA
 
-No UI tests (qa=none, a deliberate decision). The gate runs Go unit tests, including
+The default gate has no GUI automation (qa=none). macOS Go tests compile the native helper and run its offline protocol self-test; native visual previews remain opt-in. The gate runs Go unit tests, including
 `clients/typescript/qa_test.go`: generated-contract drift, TypeScript compilation, caller unit
 tests, packed independent consumers and real Go HTTP-server integration. Run
 `npm ci --prefix clients/typescript --ignore-scripts` first; the gate never downloads missing tools.
@@ -127,3 +128,7 @@ tests, packed independent consumers and real Go HTTP-server integration. Run
 - **Record keeping:** a session opened in this directory records its work in this
   repository's git history and `TODO.md` — every item verifiable, and what was not done is
   written down too.
+
+The local menu-bar application is built with `./scripts/build-macos-app.sh` on macOS.
+Lifecycle, headless CLI opt-in and native verification are documented in
+`docs/macos-menu-bar.md`.

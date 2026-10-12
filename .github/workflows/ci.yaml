@@ -33,3 +33,18 @@ jobs:
           GOOS=darwin go vet ./...
       - name: Formatting
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+  macos-menu:
+    runs-on: macos-latest
+    env:
+      GOMAXPROCS: 2
+      GOMEMLIMIT: 256MiB
+      GOFLAGS: -p=1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Native protocol and lifecycle
+        run: go test -count=1 ./internal/menubar ./cmd/dumb-worker
+      - name: Local application bundle
+        run: ./scripts/build-macos-app.sh

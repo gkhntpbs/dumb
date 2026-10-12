@@ -58,7 +58,7 @@ func TestPlistIsValidXML(t *testing.T) {
 			t.Errorf("plist lacks %q: %q", want, strs)
 		}
 	}
-	for _, want := range []string{"<key>RunAtLoad</key>\n\t<true/>", "<key>KeepAlive</key>\n\t<true/>", "<key>ThrottleInterval</key>\n\t<integer>10</integer>", "StandardErrorPath"} {
+	for _, want := range []string{"<key>RunAtLoad</key>\n\t<true/>", "<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>", "<key>ThrottleInterval</key>\n\t<integer>10</integer>", "StandardErrorPath"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("plist lacks %q", want)
 		}

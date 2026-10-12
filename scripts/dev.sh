@@ -48,7 +48,7 @@ printf '%s' "$WTOKEN" > "$T/worker.token"
 DUMB_ADDR="127.0.0.1:$PORT" DUMB_TOKENS_FILE="$T/tokens" "$T/bin/dumb-server" > "$T/server.log" 2>&1 &
 PIDS+=($!)
 for _ in $(seq 50); do curl -s -o /dev/null "http://127.0.0.1:$PORT/" && break; sleep 0.1; done
-"$T/bin/dumb-worker" run -server "http://127.0.0.1:$PORT" -token-file "$T/worker.token" -models "$MODELS" > "$T/worker.log" 2>&1 &
+"$T/bin/dumb-worker" run -headless -server "http://127.0.0.1:$PORT" -token-file "$T/worker.token" -models "$MODELS" > "$T/worker.log" 2>&1 &
 PIDS+=($!)
 
 FIRST="${MODELS%%,*}"

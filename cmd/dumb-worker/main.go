@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/gkhntpbs/dumb/internal/doctor"
+	"github.com/gkhntpbs/dumb/internal/menubar"
 	"github.com/gkhntpbs/dumb/internal/ollama"
 	"github.com/gkhntpbs/dumb/internal/protocol"
 	"github.com/gkhntpbs/dumb/internal/service"
@@ -85,6 +86,7 @@ type config struct {
 	logDir                               string // service: macOS log directory
 	capacity                             int
 	system                               bool // service: Linux system unit
+	headless                             bool
 	ollamaConfigured                     bool
 	newSystem                            func(*ollama.Client) *ollama.System
 }
@@ -114,6 +116,7 @@ func parseFlags(name string, args []string, stderr io.Writer) (*config, []string
 	if err != nil {
 		return nil, nil, fmt.Errorf("DUMB_CAPACITY: %w", err)
 	}
+	fs.BoolVar(&c.headless, "headless", os.Getenv("DUMB_HEADLESS") == "1", "run without the macOS menu bar (env DUMB_HEADLESS=1)")
 	fs.StringVar(&c.server, "server", os.Getenv("DUMB_SERVER"), "server URL (env DUMB_SERVER)")
 	fs.StringVar(&c.tokenFile, "token-file", os.Getenv("DUMB_TOKEN_FILE"), "token file, mode 0600 (env DUMB_TOKEN_FILE)")
 	fs.StringVar(&c.models, "models", os.Getenv("DUMB_MODELS"), "comma-separated models (env DUMB_MODELS)")
@@ -257,6 +260,26 @@ func cmdRun(ctx context.Context, c *config, logger *log.Logger) int {
 		}
 		s.probation = p
 	}
+	if runtime.GOOS == "darwin" && !c.headless {
+		path, uerr := menuHelper(exe)
+		var session *menubar.Session
+		if uerr == nil {
+			session, uerr = menubar.Start(ctx, path, 5*time.Second)
+		}
+		if uerr != nil {
+			logger.Printf("menu bar unavailable; no jobs will be claimed: %v", uerr)
+			if s.probation != nil && errors.Is(s.probation.Rollback(), update.ErrRestart) {
+				return exitRestart
+			}
+			<-ctx.Done()
+			return exitOK
+		}
+		defer session.Close()
+		view := &menuView{session: session, mode: "starting", category: "none"}
+		s.controls, s.uiFailed, s.status = session.Events(), session.Failed(), view.lifecycle
+		wcfg.OnStatus = view.worker
+		view.lifecycle("starting", "none")
+	}
 	return s.run(ctx)
 }
 
@@ -345,6 +368,9 @@ func cmdService(ctx context.Context, c *config, sub string, stdout io.Writer, lo
 		}
 	}
 	c.addOllamaEnvironment(envs)
+	if c.headless {
+		envs["DUMB_HEADLESS"] = "1"
+	}
 	if c.channel != update.ChannelStable {
 		envs["DUMB_CHANNEL"] = c.channel
 	}

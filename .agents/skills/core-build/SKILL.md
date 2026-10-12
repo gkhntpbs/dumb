@@ -22,6 +22,7 @@ Order: clean → unit tests, with `QA_STRICT=1`.
 ```bash
 go build ./...
 npm --prefix clients/typescript run build
+if [ "$(uname -s)" = Darwin ]; then ./scripts/build-macos-app.sh; fi
 ```
 Confirm the output exists (path + size); for a signed artefact, verify the signature.
 - On a signing or credential error, never report success; say exactly what is missing.

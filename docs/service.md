@@ -116,3 +116,13 @@ an update restart, and a probation rollback, the worker finishes or fails its
 jobs in flight, then calls `POST /v1/workers/goodbye`: the server stops counting
 it online at once. Not after `401` / `426` (the server would refuse it too) or
 `kill -9` (then the server notices after its online timeout, as before).
+
+## macOS menu control
+
+The local menu-bar application and headless CLI opt-in are documented in
+[macos-menu-bar.md](macos-menu-bar.md). New launchd templates restart only
+unsuccessful exits (`KeepAlive: {SuccessfulExit: false}`). Menu Quit drains jobs
+and exits successfully, so it remains stopped until next login or explicit
+start. Update exit 4 and crashes still restart. Existing installed plists are
+not silently rewritten; this task verified the template without installing a
+service.

@@ -97,3 +97,11 @@ running executable on every OS. While a state file exists no new update starts.
 Exit code **4** means "restart me now". launchd (`KeepAlive`, `ThrottleInterval`
 10 s: immediate when the process ran at least 10 s), systemd (`Restart=always`,
 5 s) and the Windows service (`sc.exe failure` restart actions) all restart it.
+
+## Local macOS application
+
+`./scripts/build-macos-app.sh` builds the menu-bar application locally without
+publishing. Its native helper is not part of the current GoReleaser CLI
+archives and is never overwritten by the signed Go binary updater. Signed
+helper distribution, notarization and tagged native application packaging
+remain pending. See [macos-menu-bar.md](macos-menu-bar.md).

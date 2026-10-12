@@ -71,7 +71,7 @@ GH="$(cat "$T/gh.url")"
 cat > "$T/bin/svc.sh" <<EOF
 #!/usr/bin/env bash
 for i in 1 2 3 4 5; do
-  "$T/install/dumb-worker" run -server http://127.0.0.1:$PORT -token-file "$T/token" -models e2e:model -update-url "$GH"
+  "$T/install/dumb-worker" run -headless -server http://127.0.0.1:$PORT -token-file "$T/token" -models e2e:model -update-url "$GH"
   rc=\$?
   echo "svc: worker exited with \$rc"
   [[ \$rc -eq 4 ]] || exit \$rc

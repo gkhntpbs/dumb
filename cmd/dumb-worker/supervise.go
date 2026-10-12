@@ -36,6 +36,9 @@ type supervisor struct {
 	jitter    time.Duration
 	backoff   time.Duration // first wait after a 426 with no usable update; doubles
 	maxBack   time.Duration
+	controls  <-chan string
+	uiFailed  <-chan struct{}
+	status    func(string, string)
 	log       *log.Logger
 }
 
@@ -64,6 +67,15 @@ func (s *supervisor) run(parent context.Context) int {
 
 	backoff := s.backoff
 	for {
+		select {
+		case <-s.uiFailed:
+			s.log.Print("menu helper unavailable; no jobs will be claimed")
+			s.report("error", "ui")
+			<-ctx.Done()
+			return stoppedCode(ctx)
+		default:
+		}
+		s.report("starting", "none")
 		w, err := s.newWorker(onHello)
 		if err != nil {
 			s.log.Print(err)
@@ -72,8 +84,72 @@ func (s *supervisor) run(parent context.Context) int {
 		var applied atomic.Bool
 		pctx, stopPeriodic := context.WithCancel(ctx)
 		go s.periodic(pctx, func() { applied.Store(true); w.Drain() })
-		err = w.Run(ctx)
+		result := make(chan error, 1)
+		go func() { result <- w.Run(ctx) }()
+		mode := ""
+	running:
+		for {
+			select {
+			case err = <-result:
+				break running
+			case control := <-s.controls:
+				if mode != "" {
+					if control == "quit" && mode == "paused" {
+						mode = "quit"
+						s.report("stopping", "none")
+					}
+					continue
+				}
+				switch control {
+				case "pause":
+					mode = "paused"
+					s.report("draining", "none")
+					w.Drain()
+				case "quit":
+					mode = "quit"
+					s.report("stopping", "none")
+					w.Drain()
+				}
+			case <-s.uiFailed:
+				mode = "ui"
+				s.log.Print("menu helper unavailable; draining jobs and stopping claims")
+				s.report("draining", "ui")
+				w.Drain()
+				s.uiFailed = nil
+			}
+		}
 		stopPeriodic()
+		if mode == "quit" && err == nil {
+			return exitOK
+		}
+		if mode == "ui" && !applied.Load() && ctx.Err() == nil {
+			s.report("error", "ui")
+			<-ctx.Done()
+		}
+		if mode == "paused" && err == nil && !applied.Load() && ctx.Err() == nil {
+			s.report("paused", "none")
+		paused:
+			for {
+				select {
+				case control := <-s.controls:
+					if control == "resume" {
+						s.report("starting", "none")
+						break paused
+					}
+					if control == "quit" {
+						return exitOK
+					}
+				case <-s.uiFailed:
+					s.report("error", "ui")
+					s.uiFailed = nil
+					<-ctx.Done()
+					return stoppedCode(ctx)
+				case <-ctx.Done():
+					return exitOK
+				}
+			}
+			continue
+		}
 		var up *worker.ErrUpgradeRequired
 		switch {
 		case applied.Load():
@@ -82,6 +158,7 @@ func (s *supervisor) run(parent context.Context) int {
 		case errors.Is(context.Cause(ctx), update.ErrRestart):
 			return exitRestart
 		case errors.As(err, &up):
+			s.report("error", "upgrade")
 			s.log.Printf("UPGRADE REQUIRED: the server accepts version %s or newer; this is %s", up.MinVersion, s.version)
 			if s.tryUpdate(ctx, up.MinVersion, "upgrade required") {
 				return exitRestart
@@ -91,6 +168,14 @@ func (s *supervisor) run(parent context.Context) int {
 			select {
 			case <-ctx.Done():
 			case <-time.After(backoff):
+			case control := <-s.controls:
+				if control == "quit" {
+					return exitOK
+				}
+			case <-s.uiFailed:
+				s.report("error", "ui")
+				<-ctx.Done()
+				return exitOK
 			}
 			if ctx.Err() != nil {
 				if errors.Is(context.Cause(ctx), update.ErrRestart) {
@@ -108,7 +193,28 @@ func (s *supervisor) run(parent context.Context) int {
 			s.log.Print("stopped")
 			return exitOK
 		case err != nil:
+			category := "backend"
+			if errors.Is(err, worker.ErrUnauthorized) {
+				category = "credentials"
+			}
+			s.report("error", category)
 			s.log.Print(err)
+			if s.controls != nil {
+				for {
+					select {
+					case control := <-s.controls:
+						if control == "quit" {
+							return exitOK
+						}
+					case <-s.uiFailed:
+						s.report("error", "ui")
+						<-ctx.Done()
+						return exitOK
+					case <-ctx.Done():
+						return exitOK
+					}
+				}
+			}
 			return exitError
 		}
 		return exitOK
@@ -123,7 +229,9 @@ func (s *supervisor) tryUpdate(ctx context.Context, min, why string) bool {
 		}
 		return false
 	}
+	s.report("updating", "none")
 	v, err := s.upd.Update(ctx, min)
+	s.report("", "none")
 	switch {
 	case err == nil:
 		s.log.Printf("update (%s): installed %s", why, v)
@@ -158,4 +266,17 @@ func (s *supervisor) periodic(ctx context.Context, applied func()) {
 			return
 		}
 	}
+}
+
+func (s *supervisor) report(state, category string) {
+	if s.status != nil {
+		s.status(state, category)
+	}
+}
+
+func stoppedCode(ctx context.Context) int {
+	if errors.Is(context.Cause(ctx), update.ErrRestart) {
+		return exitRestart
+	}
+	return exitOK
 }

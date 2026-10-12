@@ -53,7 +53,14 @@ const DefaultModelCheck = time.Minute
 
 type ReadinessRecovery interface{ Ensure(context.Context) error }
 
+type Status struct {
+	Error  bool
+	Ready  bool
+	Active int
+}
+
 type Config struct {
+	OnStatus  func(Status)
 	Recovery  ReadinessRecovery
 	Transport http.RoundTripper
 	ServerURL string   // https, or http on a loopback host
@@ -119,6 +126,10 @@ type Worker struct {
 	log     *log.Logger
 	backoff time.Duration // first retry delay; doubles up to maxBackoff
 	maxBack time.Duration
+
+	statusMu       sync.Mutex
+	active         atomic.Int64
+	readinessError atomic.Bool
 
 	mu      sync.Mutex
 	maxWait time.Duration
@@ -197,11 +208,25 @@ func (w *Worker) current() ([]string, <-chan struct{}) {
 }
 
 func (w *Worker) setModels(m []string) {
+	w.readinessError.Store(false)
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	w.models = m
 	close(w.changed)
 	w.changed = make(chan struct{})
+	w.mu.Unlock()
+	w.reportStatus()
+}
+
+func (w *Worker) reportStatus() {
+	w.statusMu.Lock()
+	defer w.statusMu.Unlock()
+	if w.cfg.OnStatus == nil {
+		return
+	}
+	w.mu.Lock()
+	status := Status{Error: w.readinessError.Load(), Ready: len(w.models) > 0, Active: int(w.active.Load())}
+	w.mu.Unlock()
+	w.cfg.OnStatus(status)
 }
 
 // present lists Ollama's models and returns the configured ones it has, in
@@ -265,6 +290,7 @@ func (w *Worker) unavailable(ctx context.Context) {
 		w.changed = make(chan struct{})
 	}
 	w.mu.Unlock()
+	w.reportStatus()
 	if hadModels {
 		w.goodbye(ctx)
 	}
@@ -303,6 +329,8 @@ func (w *Worker) watchModels(ctx context.Context) error {
 			}
 			repairCtx, cancel := context.WithCancel(ctx)
 			stop := context.AfterFunc(w.draining, cancel)
+			w.readinessError.Store(false)
+			w.reportStatus()
 			err = w.cfg.Recovery.Ensure(repairCtx)
 			stop()
 			cancel()
@@ -310,6 +338,8 @@ func (w *Worker) watchModels(ctx context.Context) error {
 				return nil
 			}
 			if err != nil {
+				w.readinessError.Store(true)
+				w.reportStatus()
 				w.log.Printf("Ollama unavailable; recovery deferred: %v", err)
 				continue
 			}
@@ -643,6 +673,9 @@ func (w *Worker) ack(ctx context.Context, a protocol.Assignment) bool {
 const ackTimeout = 5 * time.Second
 
 func (w *Worker) runJob(ctx context.Context, a protocol.Assignment) {
+	w.active.Add(1)
+	w.reportStatus()
+	defer func() { w.active.Add(-1); w.reportStatus() }()
 	start := time.Now()
 	jctx, cancel := context.WithDeadline(ctx, a.LeaseExpiresAt)
 	// Ack in parallel with the generation, so it adds no latency. A refused

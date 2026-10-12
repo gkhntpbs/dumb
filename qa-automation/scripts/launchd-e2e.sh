@@ -101,7 +101,7 @@ online() { # wait until the server sees a worker
 
 echo "═══ 1. service install (0.1.0) ═══"
 cp "$T/build/0.1.0/dumb-worker" "$T/install/dumb-worker"
-"$T/install/dumb-worker" service install -server "$BASE" -token-file "$T/token" -models "$MODEL" \
+"$T/install/dumb-worker" service install -headless -server "$BASE" -token-file "$T/token" -models "$MODEL" \
   -update-url "$GH" -log-dir "$T/logs"
 [[ -f "$PLIST" ]] || fail "no plist"
 plutil -lint "$PLIST"

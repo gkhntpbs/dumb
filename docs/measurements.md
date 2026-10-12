@@ -183,3 +183,82 @@ OS-notification gaps in `ollama-recovery.md`. The fixtures execute no actual
 installer, daemon or model; passing them does not verify native macOS focus,
 Gatekeeper or process-tree cleanup behavior. No real installation or proxy
 configuration was modified.
+
+## 2026-10-12 — macOS menu helper and graceful controls
+
+Implemented a native AppKit accessory helper with protocol-v1 stdio and a local
+application bundle. No host Ollama, model download, installer, launchd install,
+proxy on port 11434 or persistent application was touched during these tests.
+The queue and Ollama API used the sealed recovery lab and random loopback ports;
+credentials were generated at runtime. Windows remains deferred.
+
+Commands:
+
+```sh
+GOMAXPROCS=2 GOMEMLIMIT=256MiB ./scripts/build-macos-app.sh
+GOMAXPROCS=2 GOMEMLIMIT=256MiB GOFLAGS=-p=1 ./qa-automation/scripts/build-gate.sh
+GOMAXPROCS=2 GOMEMLIMIT=256MiB go vet -p 1 ./cmd/dumb-worker ./internal/menubar ./internal/worker ./internal/service
+QA_MENU_AUTOMATED=1 \
+QA_MENU_BAR_HELPER="$PWD/dist/DUMB Worker.app/Contents/Resources/DUMBMenu.app/Contents/MacOS/dumb-menu" \
+QA_MENU_DIAGNOSTICS="$PWD/dist/menu-automated.jsonl" \
+GOMAXPROCS=2 GOMEMLIMIT=256MiB /usr/bin/time -l go test -p 1 -count=1 -v ./cmd/dumb-worker -run '^TestMenuNativePreview$'
+```
+
+The final finite native run passed in 1.32 s (timed Go command 2.92 s). The timed
+invocation reported maximum RSS 164,544,512 bytes (156.9 MiB), zero swaps and peak
+memory footprint 18,547,360 bytes. These are `/usr/bin/time -l` process-accounting
+values for the compile/test invocation, not a combined Go/AppKit hard memory
+limit. `GOMEMLIMIT` is a soft Go heap limit and does not limit native AppKit.
+The local bundle occupied 9,384 KiB; no large assets or additional model files
+were created. Owned local output was rebuilt successfully through staged swaps.
+
+The native helper consumed short JSON updates while stdin remained open and
+reported recovery, ready, serving, error, updating, draining, paused and stopping.
+Actual diagnostics are retained in `docs/qa/menu-bar-2026-10-12.jsonl`: zero
+content windows, accessory activation policy, `isActive=false` and unchanged
+foreground focus throughout. Framework `NSStatusBarWindow` surfaces are counted
+honestly (1 initially, up to 9 in AppKit's status-bar surface pool). A status-bar
+surface is required for the icon and is not a content window. The maximum active
+job count was 1. The fake backend recovered once; the queue completed jobs before
+and after pause/resume, and Quit drained without a duplicate worker or process.
+In this finite run controls were sent through a fixture channel, not clicked in
+the native menu. Error/update display phases were injected, not real downloads.
+
+The new default-gate cases cover menu lifecycle/control priority, helper death
+and missing/mismatched/timed-out handshake, explicit headless opt-in, fatal
+credential controls, upgrade backoff/retry, rollback restart preservation and
+ordered active-job snapshots. The native offline self-test validates 45 valid
+state/category combinations and 10 malformed messages before any application
+or workspace access. The existing updater suite and cross-platform Go tests
+remain green. The macOS CI job compiles/tests the helper and builds the local
+application; remote CI was not run.
+
+Red-first evidence before the associated fixes:
+
+```sh
+GOMAXPROCS=2 GOMEMLIMIT=256MiB go test -p 1 -count=1 ./cmd/dumb-worker ./internal/worker -run 'TestMenuQuitSupersedes|TestMenuAlreadyDead|TestStatusDelivery'
+```
+
+All three cases failed: `quit was discarded during drain`, `worker started
+without menu control`, and `stale active count delivered after completion`.
+They passed after allowing Quit to supersede Pause, checking UI health before
+worker startup and serializing snapshot capture/delivery. An initial real
+native preview also exposed a short-line pipe buffering defect: no status
+updates/diagnostics arrived while the helper used `readData(ofLength: 1024)`.
+Replacing it with `availableData` made live updates immediate; the finite
+native test now asserts required short-line display states and reads only the
+current invocation's diagnostics.
+
+Visual acceptance remains incomplete. The enabled computer-use tool could read
+a normal running application, but attaching the windowless helper and
+SystemUIServer returned timeout `-10005`. Its macOS API also rejected direct
+window-ID selection; the helper's AppKit status-button window number was
+4294967296. Manual preview attempts reached their bounded 180-second timeout
+without menu clicks. No actual menu screenshot or real menu-click acceptance
+was obtained, and no substitute image is presented as a screenshot. Diagnostic
+and fixture-channel evidence is separate from that remaining UI check.
+
+Native signed/notarized distribution and GoReleaser application packaging,
+quarantined-release behavior, actual installer silence and macOS-owned BTM
+notifications remain unverified. The existing Go updater never modifies the
+native helper. No push, publication or deployment occurred.
