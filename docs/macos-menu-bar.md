@@ -97,3 +97,28 @@ are then sent through a fixture channel, not clicked in the menu. The test
 checks real queue completion, native short-line display updates, zero content
 windows, accessory policy and unchanged foreground focus. Actual menu clicks
 and screenshot acceptance remain separate from this automated evidence.
+
+## Uncoil development preview
+
+Run `./scripts/menu-preview.sh` from this repository, or start the workspace's
+`DUMB worker — Menu bar preview` Uncoil run configuration. This compiles the existing
+sealed queue/recovery fixture and starts the actual native helper. It accepts
+menu Pause, Resume and Quit, and terminal input `pause`, `resume` and `quit`.
+Terminal input `error`, `updating` and `ready` injects display states only.
+Uncoil Stop sends termination to the managed process group; the preview handles
+SIGINT/SIGTERM and closes its worker, local fixture and native helper. Restart
+starts a fresh fixture.
+
+This explicit interactive preview is bounded to eight hours, with a 20-second
+long poll and a two-second model check instead of the fast automated-test
+intervals. `QA_MENU_PREVIEW_SECONDS` accepts 1 through 28800 for direct test
+invocations; the existing direct preview defaults to 180 seconds. Duration
+expiry stops the worker and reports a test timeout. The launcher clears
+`QA_MENU_AUTOMATED` and native diagnostics, builds serially with a 256 MiB Go
+memory target and refuses unowned or symlinked application outputs. Build
+outputs remain under ignored `dist/`; Go compiler cache usage is separate.
+
+No host Ollama endpoint, downloaded model, installer, service or production
+server is used. The native helper is real; jobs and backend failures are sealed
+fixtures. Terminal control tests do not establish actual menu-click or screenshot
+acceptance.

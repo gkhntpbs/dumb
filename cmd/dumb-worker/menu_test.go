@@ -315,3 +315,16 @@ func TestMenuUnavailablePreservesRollbackRestart(t *testing.T) {
 		t.Fatalf("rollback restart lost: %d", code)
 	}
 }
+
+func TestMenuPreviewDuration(t *testing.T) {
+	for _, test := range []struct {
+		raw      string
+		duration time.Duration
+		valid    bool
+	}{{"", 180 * time.Second, true}, {"28800", 8 * time.Hour, true}, {"1", time.Second, true}, {"0", 0, false}, {"-1", 0, false}, {"28801", 0, false}, {"invalid", 0, false}} {
+		duration, err := previewDuration(test.raw)
+		if (err == nil) != test.valid || duration != test.duration {
+			t.Fatalf("duration %q: %v %v", test.raw, duration, err)
+		}
+	}
+}

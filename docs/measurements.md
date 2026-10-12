@@ -262,3 +262,40 @@ Native signed/notarized distribution and GoReleaser application packaging,
 quarantined-release behavior, actual installer silence and macOS-owned BTM
 notifications remain unverified. The existing Go updater never modifies the
 native helper. No push, publication or deployment occurred.
+
+
+## 2026-10-12 — Uncoil sealed native menu preview
+
+The opt-in `scripts/menu-preview.sh` launcher compiles the sealed recovery/queue
+fixture and runs the actual AppKit helper, without host Ollama, model downloads,
+installers or service changes. Interactive polling uses a 20-second server wait
+and two-second model checks. Runtime duration is bounded to eight hours; Go
+compilation is serial with `GOMAXPROCS=2` and `GOMEMLIMIT=256MiB`.
+
+The managed Uncoil Start completed in 1.1 seconds and reached the exact
+`DUMB menu preview ready` marker with running status. SendInput `pause` produced
+draining then paused; `resume` produced starting. Injected `error` and `ready`
+display commands were acknowledged. Managed Stop completed in 0.2 seconds,
+returned idle, and a process-list check found no remaining preview test or
+native helper processes. A second Start followed by SendInput `quit` exited
+with code 0 and `PASS`; no preview/helper processes remained. Restart then
+started a fresh running preview. Restart of an already running preview completed
+in 0.6 seconds; the previous PID was gone and exactly one new preview and
+helper remained. The final preview was left running for manual inspection.
+These are terminal controls and process lifecycle
+evidence, not actual native menu clicks or screenshots.
+
+Verification:
+
+```sh
+GOMAXPROCS=2 GOMEMLIMIT=256MiB GOFLAGS=-p=1 GOPROXY=off GOSUMDB=off go test -count=1 ./cmd/dumb-worker ./internal/menubar
+GOMAXPROCS=2 GOMEMLIMIT=256MiB GOFLAGS=-p=1 GOPROXY=off GOSUMDB=off ./qa-automation/scripts/build-gate.sh
+bash -n scripts/menu-preview.sh
+git diff --check
+```
+
+All passed. The duration regression covers the default, minimum, eight-hour
+maximum and rejected invalid/out-of-range values. Default gate tests remain
+noninteractive; no new native preview ran concurrently with the managed run.
+Actual menu-click/screenshot acceptance, signed native distribution, clean
+installer behavior and macOS-owned BTM notifications remain pending.

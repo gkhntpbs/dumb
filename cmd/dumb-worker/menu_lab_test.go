@@ -1,17 +1,22 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/signal"
+	"strconv"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -31,7 +36,22 @@ func TestMenuNativePreview(t *testing.T) {
 	runMenuLab(t, true)
 }
 
+func previewDuration(raw string) (time.Duration, error) {
+	if raw == "" {
+		return 180 * time.Second, nil
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds < 1 || seconds > 28800 {
+		return 0, fmt.Errorf("QA_MENU_PREVIEW_SECONDS must be 1 through 28800")
+	}
+	return time.Duration(seconds) * time.Second, nil
+}
+
 func runMenuLab(t *testing.T, native bool) {
+	duration, err := previewDuration(os.Getenv("QA_MENU_PREVIEW_SECONDS"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	fixture := recoverylab.New(t)
 	credential := func() string {
 		b := make([]byte, 24)
@@ -44,14 +64,25 @@ func runMenuLab(t *testing.T, native bool) {
 	tokens := auth.NewStaticTokens()
 	tokens.Add(credential(), auth.RoleWorker, wt)
 	tokens.Add(credential(), auth.RoleCaller, ct)
-	service, err := server.New(server.Config{Auth: tokens, MinWorkerVersion: "0.1.0", MaxWait: 20 * time.Millisecond})
+	interactive := native && os.Getenv("QA_MENU_STDIN") == "1"
+	maxWait, modelCheck := 20*time.Millisecond, 20*time.Millisecond
+	if interactive {
+		maxWait, modelCheck = 20*time.Second, 2*time.Second
+	}
+	service, err := server.New(server.Config{Auth: tokens, MinWorkerVersion: "0.1.0", MaxWait: maxWait})
 	if err != nil {
 		t.Fatal(err)
 	}
 	endpoint := httptest.NewServer(service)
 	defer endpoint.Close()
 	transport := fixture.TransportFor(endpoint.URL)
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	parent := context.Background()
+	if native {
+		signalContext, stopSignals := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+		defer stopSignals()
+		parent = signalContext
+	}
+	ctx, cancel := context.WithTimeout(parent, duration)
 	defer cancel()
 	controls := make(chan string, 8)
 	s := &supervisor{controls: controls, log: log.New(io.Discard, "", 0)}
@@ -67,7 +98,31 @@ func runMenuLab(t *testing.T, native bool) {
 		}
 		defer session.Close()
 		view = &menuView{session: session, mode: "starting", category: "none"}
-		s.controls, s.uiFailed, s.status = session.Events(), session.Failed(), view.lifecycle
+		s.controls, s.uiFailed, s.status = controls, session.Failed(), view.lifecycle
+		if interactive {
+			s.status = func(state, category string) {
+				view.lifecycle(state, category)
+				if state != "" {
+					fmt.Printf("Preview state: %s\n", state)
+				}
+			}
+		}
+		if os.Getenv("QA_MENU_AUTOMATED") != "1" {
+			go func() {
+				for {
+					select {
+					case event := <-session.Events():
+						select {
+						case controls <- event:
+						case <-ctx.Done():
+							return
+						}
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+		}
 		if os.Getenv("QA_MENU_AUTOMATED") == "1" {
 			s.controls = controls
 		}
@@ -77,7 +132,7 @@ func runMenuLab(t *testing.T, native bool) {
 	var starts atomic.Int32
 	s.newWorker = func(onHello func()) (runner, error) {
 		starts.Add(1)
-		cfg := worker.Config{ServerURL: endpoint.URL, Token: wt, Models: []string{"fixture"}, Version: "0.1.0", Ollama: fixture.Client(), Recovery: recovery, Transport: transport, ModelCheck: 20 * time.Millisecond, OnHello: onHello}
+		cfg := worker.Config{ServerURL: endpoint.URL, Token: wt, Models: []string{"fixture"}, Version: "0.1.0", Ollama: fixture.Client(), Recovery: recovery, Transport: transport, ModelCheck: modelCheck, OnHello: onHello}
 		if view != nil {
 			cfg.OnStatus = view.worker
 		}
@@ -121,7 +176,42 @@ func runMenuLab(t *testing.T, native bool) {
 		view.lifecycle("", "none")
 	}
 	if native && os.Getenv("QA_MENU_AUTOMATED") != "1" {
-		t.Log("native fixture ready; use menu Pause, Resume, Quit; QA_MENU_STAGE_FILE accepts error/updating/ready")
+		fmt.Println("DUMB menu preview ready")
+		commands := make(chan string, 8)
+		if os.Getenv("QA_MENU_STDIN") == "1" {
+			go func() {
+				scanner := bufio.NewScanner(os.Stdin)
+				scanner.Buffer(make([]byte, 1024), 4096)
+				for scanner.Scan() {
+					select {
+					case commands <- string(bytes.TrimSpace(scanner.Bytes())):
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+		}
+		apply := func(command string) {
+			switch command {
+			case "error":
+				fmt.Println("Preview display: error")
+				view.lifecycle("error", "backend")
+			case "updating":
+				fmt.Println("Preview display: updating")
+				view.lifecycle("updating", "none")
+			case "ready":
+				fmt.Println("Preview display: ready")
+				view.lifecycle("", "none")
+				view.lifecycle("starting", "none")
+			case "pause", "resume", "quit":
+				select {
+				case controls <- command:
+				case <-ctx.Done():
+				}
+			default:
+				fmt.Println("Preview input accepts ready, error, updating, pause, resume, quit")
+			}
+		}
 		stage := os.Getenv("QA_MENU_STAGE_FILE")
 		tick := time.NewTicker(100 * time.Millisecond)
 		defer tick.Stop()
@@ -134,22 +224,25 @@ func runMenuLab(t *testing.T, native bool) {
 				}
 				return
 			case <-ctx.Done():
+				select {
+				case <-result:
+				case <-time.After(2 * time.Second):
+					t.Fatal("preview worker did not stop")
+				}
+				if parent.Err() != nil {
+					fmt.Println("DUMB menu preview stopped")
+					return
+				}
 				t.Fatal("native fixture timed out")
+			case command := <-commands:
+				apply(command)
 			case <-tick.C:
 				if stage != "" {
 					b, _ := os.ReadFile(stage)
 					command := string(bytes.TrimSpace(b))
 					if command != previous {
 						previous = command
-						switch command {
-						case "error":
-							view.lifecycle("error", "backend")
-						case "updating":
-							view.lifecycle("updating", "none")
-						case "ready":
-							view.lifecycle("", "none")
-							view.lifecycle("starting", "none")
-						}
+						apply(command)
 					}
 				}
 			}
