@@ -167,11 +167,35 @@ func SystemdUnit(c Config) string {
 
 // WindowsCreateArgs are the sc.exe arguments that register the service. sc.exe
 // cannot set environment variables, so configuration travels as flags.
+// windowsQuote follows the CommandLineToArgvW escaping rules, including
+// embedded quotes and trailing backslashes in paths with spaces.
+func windowsQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	slashes := 0
+	for _, r := range s {
+		if r == '\\' {
+			slashes++
+			continue
+		}
+		if r == '"' {
+			b.WriteString(strings.Repeat("\\", slashes*2+1))
+		} else {
+			b.WriteString(strings.Repeat("\\", slashes))
+		}
+		slashes = 0
+		b.WriteRune(r)
+	}
+	b.WriteString(strings.Repeat("\\", slashes*2))
+	b.WriteByte('"')
+	return b.String()
+}
+
 func WindowsCreateArgs(c Config) []string {
-	bin := []string{`"` + c.Binary + `"`, "run"}
+	bin := []string{windowsQuote(c.Binary), "run", "-headless"}
 	for _, k := range c.envKeys() {
 		if f, ok := envFlags[k]; ok {
-			bin = append(bin, "-"+f, `"`+c.Env[k]+`"`)
+			bin = append(bin, "-"+f, windowsQuote(c.Env[k]))
 		}
 	}
 	return []string{"create", c.label(), "binPath=", strings.Join(bin, " "), "start=", "auto", "DisplayName=", "DUMB worker"}
@@ -263,6 +287,9 @@ func Install(ctx context.Context, c Config) error {
 		}
 		// Restart on any non-zero exit, including 4 (after an update or rollback).
 		if err := c.run(ctx, append([]string{"sc.exe"}, WindowsFailureArgs(c)...)); err != nil {
+			return err
+		}
+		if err := c.run(ctx, []string{"sc.exe", "failureflag", c.label(), "1"}); err != nil {
 			return err
 		}
 		return c.run(ctx, []string{"sc.exe", "start", c.label()})

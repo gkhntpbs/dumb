@@ -1,0 +1,6 @@
+=== RUN   TestWindowsOfficialHTTPS
+    lifecycle_test.go:281: verified HTTPS host status=200
+    lifecycle_test.go:281: verified HTTPS host status=404
+--- PASS: TestWindowsOfficialHTTPS (1.64s)
+PASS
+ok  	github.com/gkhntpbs/dumb/internal/ollama/e2e/windows	2.105s

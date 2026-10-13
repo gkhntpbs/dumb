@@ -1,0 +1,56 @@
+=== RUN   TestDesktopCredentialUsesExistingProtocolWithoutFollowingRedirects
+=== RUN   TestDesktopCredentialUsesExistingProtocolWithoutFollowingRedirects/200
+=== RUN   TestDesktopCredentialUsesExistingProtocolWithoutFollowingRedirects/401
+=== RUN   TestDesktopCredentialUsesExistingProtocolWithoutFollowingRedirects/426
+=== RUN   TestDesktopCredentialUsesExistingProtocolWithoutFollowingRedirects/302
+--- PASS: TestDesktopCredentialUsesExistingProtocolWithoutFollowingRedirects (0.00s)
+    --- PASS: TestDesktopCredentialUsesExistingProtocolWithoutFollowingRedirects/200 (0.00s)
+    --- PASS: TestDesktopCredentialUsesExistingProtocolWithoutFollowingRedirects/401 (0.00s)
+    --- PASS: TestDesktopCredentialUsesExistingProtocolWithoutFollowingRedirects/426 (0.00s)
+    --- PASS: TestDesktopCredentialUsesExistingProtocolWithoutFollowingRedirects/302 (0.00s)
+=== RUN   TestDesktopConfigurationIsRestrictedAndNeverOverwritten
+--- PASS: TestDesktopConfigurationIsRestrictedAndNeverOverwritten (0.23s)
+=== RUN   TestDesktopSupervisorRestartsOnlyExitFourAndStopsItsOwnChild
+    onboarding_windows_test.go:168: PASS: resident byte-identical supervisor copy does not hold the previous stable worker image; native .prev deletion succeeds after exit4 restart
+--- PASS: TestDesktopSupervisorRestartsOnlyExitFourAndStopsItsOwnChild (1.62s)
+=== RUN   TestDesktopSupervisorRejectsReadinessPathTraversal
+--- PASS: TestDesktopSupervisorRejectsReadinessPathTraversal (0.00s)
+=== RUN   TestDesktopActualSingleExecutableTraySurvivesLauncherExit
+    onboarding_windows_test.go:197: set QA_WINDOWS_DESKTOP=1 for isolated actual tray worker acceptance
+--- SKIP: TestDesktopActualSingleExecutableTraySurvivesLauncherExit (0.00s)
+PASS
+ok  	github.com/gkhntpbs/dumb/cmd/dumb-worker	2.354s
+PASS: native focused regressions: menubar 0.433s, worker command 2.492s, Ollama 0.938s
+PASS: current self-contained GUI worker build, version 0.1.0
+PASS: manual backend helper PowerShell parser and bounded authenticated readiness
+PASS: manual backend helper owned-process cleanup and process environment restoration
+PASS: manual backend helper restricted token directory; token contents absent from output
+PASS: postflight: QA services=0, default API listeners=0, owned fixture processes=0
+LIMITATION: actual same-exe tray test failed twice under non-interactive SSH (32.74s and 32.66s)
+DIAGNOSIS: desktop status UI unavailable; no hello or jobs accepted
+PASS: later explicitly authorized real RDP setup, hidden token input, real tray handoff and terminal-close survival
+PASS: actual authorized RDP setup registered the owned per-user HKCU Run value
+PASS: exact own setup console client-rectangle screenshot visually inspected
+PASS: setup terminal closed; detached supervisor, actual worker and same-exe tray remained in existing RDP session
+PASS: exact native tray popup screenshot visually inspected: ready, zero active, Pause and Quit
+OBSERVED: first real eight-token queue job expired with a 10-second cold-generation deadline
+PASS: same eight-token job completed with nonempty output in 13288ms under a 60-second deadline after terminal closure
+PASS: all transient owned launch/input/capture QA tasks deleted
+PASS: successful worker, tray, owned Ollama and fixture backend intentionally retained for user inspection
+PENDING: actual sign-in/reboot persistence and production signed release
+PASS: native saved Ollama selections survive unset setup environment; explicit endpoint ownership preserved
+PASS: saved model directory reaches managed-child launch environment
+PASS: native startup desktop command uses private supervisor copy; exit4 restart and previous stable image deletion
+PASS: environment-free retained-root relaunch survived beyond 149s and completed real eight-token result in 1165ms
+OBSERVED: earlier resident processes later absent; historical exit cause unresolved in available restricted logs
+PASS: exact-own interactive stop recorded graceful stopped log; owned model tree removed
+PASS: private fixture backup and final development executable SHA256 match before manual replacement
+PASS: final startup-command relaunch with all Ollama override variables removed confirms fresh hello
+
+PASS: final affected native regressions worker command 4.172s, Ollama 0.872s, menubar 0.421s
+PASS: final macOS build gate GREEN after all shared production changes
+PASS: final environment-free startup command retained private supervisor/worker/tray beyond 106s
+PASS: final installed and private supervisor executable SHA256 match latest development build
+PASS: final real eight-token result completed in 1287ms under 60s deadline
+PASS: final resident roles and fixture backend intentionally retained; transient QA tasks=0
+PENDING: actual sign-in/reboot persistence and production signed-release distribution

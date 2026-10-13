@@ -89,7 +89,7 @@ func TestWindowsCreateArgs(t *testing.T) {
 	c.Binary = `C:\Program Files\DUMB\dumb-worker.exe`
 	got := WindowsCreateArgs(c)
 	want := []string{"create", "dumb-worker", "binPath=",
-		`"C:\Program Files\DUMB\dumb-worker.exe" run -models "a:1b,b<2>" -server "https://dumb.example.invalid" -token-file "/home/u/.dumb/token"`,
+		`"C:\Program Files\DUMB\dumb-worker.exe" run -headless -models "a:1b,b<2>" -server "https://dumb.example.invalid" -token-file "/home/u/.dumb/token"`,
 		"start=", "auto", "DisplayName=", "DUMB worker"}
 	if !slices.Equal(got, want) {
 		t.Errorf("got  %q\nwant %q", got, want)
@@ -113,13 +113,21 @@ func TestInstallUninstall(t *testing.T) {
 			[]string{"systemctl daemon-reload", "systemctl enable --now dumb-worker.service"},
 			[]string{"systemctl disable --now dumb-worker.service", "systemctl daemon-reload"}},
 		{"windows", false,
-			[]string{"sc.exe create dumb-worker binPath= \"/opt/dumb & co/dumb-worker\" run -models \"a:1b,b<2>\" -server \"https://dumb.example.invalid\" -token-file \"/home/u/.dumb/token\" start= auto DisplayName= DUMB worker",
-				"sc.exe failure dumb-worker reset= 86400 actions= restart/0/restart/5000/restart/60000", "sc.exe start dumb-worker"},
+			[]string{"sc.exe create dumb-worker binPath= \"/opt/dumb & co/dumb-worker\" run -headless -models \"a:1b,b<2>\" -server \"https://dumb.example.invalid\" -token-file \"/home/u/.dumb/token\" start= auto DisplayName= DUMB worker",
+				"sc.exe failure dumb-worker reset= 86400 actions= restart/0/restart/5000/restart/60000", "sc.exe failureflag dumb-worker 1", "sc.exe start dumb-worker"},
 			[]string{"sc.exe stop dumb-worker", "sc.exe delete dumb-worker"}},
 	}
 	for _, tc := range cases {
 		c, r := cfg(t, tc.goos)
 		c.System = tc.system
+		// Install validates the real host filesystem path, even when rendering a
+		// definition for another OS. Keep the fixture absolute on Windows too.
+		absolute, err := filepath.Abs(c.Binary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		originalBinary := c.Binary
+		c.Binary = absolute
 		p := Path(c)
 		if err := Install(context.Background(), c); err != nil {
 			t.Fatalf("%s: %v", tc.goos, err)
@@ -127,6 +135,7 @@ func TestInstallUninstall(t *testing.T) {
 		want := slices.Clone(tc.install)
 		for i := range want {
 			want[i] = strings.ReplaceAll(want[i], "{path}", p)
+			want[i] = strings.ReplaceAll(want[i], windowsQuote(originalBinary), windowsQuote(c.Binary))
 		}
 		if !slices.Equal(r.runs, want) {
 			t.Errorf("%s install: %q\nwant %q", tc.goos, r.runs, want)
@@ -160,15 +169,15 @@ func TestInstallUninstall(t *testing.T) {
 
 func TestPaths(t *testing.T) {
 	c := Config{GOOS: "darwin", Home: "/Users/u"}
-	if p := Path(c); p != "/Users/u/Library/LaunchAgents/dumb-worker.plist" {
+	if p := Path(c); p != filepath.Join(c.Home, "Library", "LaunchAgents", "dumb-worker.plist") {
 		t.Error(p)
 	}
 	c.GOOS = "linux"
-	if p := Path(c); p != "/Users/u/.config/systemd/user/dumb-worker.service" {
+	if p := Path(c); p != filepath.Join(c.Home, ".config", "systemd", "user", "dumb-worker.service") {
 		t.Error(p)
 	}
 	c.System = true
-	if p := Path(c); p != "/etc/systemd/system/dumb-worker.service" {
+	if p := Path(c); p != filepath.Join("/", "etc", "systemd", "system", "dumb-worker.service") {
 		t.Error(p)
 	}
 }
@@ -188,7 +197,7 @@ func TestSystemdSystemUnitHardening(t *testing.T) {
 	svc := u[strings.Index(u, "[Service]"):strings.Index(u, "[Install]")]
 	for _, want := range []string{
 		"User=dumb", "Group=dumb", "NoNewPrivileges=yes", "ProtectSystem=strict",
-		`ReadWritePaths="/opt/dumb & co"`, "PrivateTmp=yes", "ProtectHome=read-only", "PrivateDevices=yes",
+		"ReadWritePaths=" + systemdQuote(filepath.Dir(c.Binary)), "PrivateTmp=yes", "ProtectHome=read-only", "PrivateDevices=yes",
 		"CapabilityBoundingSet=\n", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX", "Restart=always",
 	} {
 		if !strings.Contains(svc, want) {
@@ -204,10 +213,22 @@ func TestSystemdSystemUnitHardening(t *testing.T) {
 	c.User = "svc-dumb"
 	c.Binary = "/srv/100%/dumb-worker"
 	u = SystemdUnit(c)
-	if !strings.Contains(u, "User=svc-dumb\nGroup=svc-dumb") || !strings.Contains(u, `ReadWritePaths="/srv/100%%"`) {
+	if !strings.Contains(u, "User=svc-dumb\nGroup=svc-dumb") || !strings.Contains(u, "ReadWritePaths="+systemdQuote(filepath.Dir(c.Binary))) {
 		t.Errorf("custom user / escaped path:\n%s", u)
 	}
 	if !strings.Contains(SystemUserHelp, "useradd --system") || !strings.Contains(SystemUserHelp, "-o dumb") {
 		t.Error("SystemUserHelp does not create the dumb user")
+	}
+}
+
+func TestWindowsQuoteProtectsEmbeddedQuotesAndTrailingSlash(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{`C:\Program Files\DUMB\`, `"C:\Program Files\DUMB\\"`},
+		{`a"b`, `"a\"b"`},
+		{`simple`, `"simple"`},
+	} {
+		if got := windowsQuote(tc.input); got != tc.want {
+			t.Fatalf("%q => %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }

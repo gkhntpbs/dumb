@@ -55,8 +55,13 @@ func (s Status) Valid() bool {
 }
 
 func Start(ctx context.Context, path string, timeout time.Duration) (*Session, error) {
+	return StartWithArgs(ctx, path, nil, timeout)
+}
+
+func StartWithArgs(ctx context.Context, path string, args []string, timeout time.Duration) (*Session, error) {
 	child, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(child, path)
+	cmd := exec.CommandContext(child, path, args...)
+	configureHelper(cmd)
 	input, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()

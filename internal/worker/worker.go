@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -104,9 +103,10 @@ func ReadTokenFile(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("worker: %w", err)
 	}
-	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("worker: token file %s has mode %v; it must not be group or world accessible (chmod 600)", path, fi.Mode().Perm())
+	if err := checkTokenPermissions(path, fi); err != nil {
+		return "", err
 	}
+
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("worker: %w", err)

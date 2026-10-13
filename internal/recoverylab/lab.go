@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -46,6 +47,9 @@ type Fixture struct {
 
 func New(t testing.TB) *Fixture {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("sealed macOS app-install fixture requires POSIX executable modes; Windows native lifecycle tests run separately")
+	}
 	rootPath := filepath.Clean(t.TempDir())
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {

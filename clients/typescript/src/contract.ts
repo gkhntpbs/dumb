@@ -1,4 +1,116 @@
 export interface paths {
+    "/admin/v1/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["adminLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["adminLogout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/api": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminApi"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/workers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminWorkers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["adminQueue"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workers/hello": {
         parameters: {
             query?: never;
@@ -147,6 +259,12 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AdminSession: {
+            authenticated: boolean;
+        };
+        AdminLogin: {
+            password: string;
+        };
         Error: {
             error: string;
         };
@@ -206,6 +324,113 @@ export interface components {
             workers_online: number;
             models: string[];
         };
+        AdminApiCounters: {
+            total_requests: number;
+            window_requests: number;
+            inflight: number;
+            success: number;
+            redirects: number;
+            client_errors: number;
+            server_errors: number;
+            unauthorized: number;
+            rate_limited: number;
+            mean_latency_ms: number | null;
+        };
+        AdminApiRoute: {
+            total_requests: number;
+            window_requests: number;
+            inflight: number;
+            success: number;
+            redirects: number;
+            client_errors: number;
+            server_errors: number;
+            unauthorized: number;
+            rate_limited: number;
+            mean_latency_ms: number | null;
+            route: string;
+        };
+        AdminApiBucket: {
+            at: string;
+            requests: number;
+            client_errors: number;
+            server_errors: number;
+            rate_limited: number;
+        };
+        AdminApi: {
+            total_requests: number;
+            window_requests: number;
+            inflight: number;
+            success: number;
+            redirects: number;
+            client_errors: number;
+            server_errors: number;
+            unauthorized: number;
+            rate_limited: number;
+            mean_latency_ms: number | null;
+            snapshot_at: string;
+            epoch: string;
+            uptime_seconds: number;
+            status: "serving";
+            window_seconds: 300;
+            requests_per_second: number;
+            routes: components["schemas"]["AdminApiRoute"][];
+            history: components["schemas"]["AdminApiBucket"][];
+        };
+        AdminSummary: {
+            snapshot_at: string;
+            epoch: string;
+            workers_online: number;
+            capacity: number;
+            active_slots: number;
+            free_slots: number;
+            queued: number;
+            leased: number;
+            done: number;
+            failed: number;
+            expired: number;
+            models: string[];
+            oldest_queued_ms: number;
+            latency_samples: number;
+            mean_wait_ms: number | null;
+            mean_completion_ms: number | null;
+            measurement_window_seconds: 300;
+        };
+        AdminWorker: {
+            worker_id: string;
+            worker_version: string;
+            models: string[];
+            capacity: number;
+            live_leases: number;
+            free_slots: number;
+            last_seen: string;
+            state: "online-idle" | "online-busy" | "offline";
+        };
+        AdminJob: {
+            job_id: string;
+            model: string;
+            state: "queued" | "leased" | "done" | "failed" | "expired";
+            created_at: string;
+            deadline_at: string;
+            leased_at?: string;
+            worker_id?: string;
+            wait_ms?: number;
+        };
+        AdminWorkers: {
+            snapshot_at: string;
+            epoch: string;
+            total: number;
+            offset: number;
+            limit: number;
+            items: components["schemas"]["AdminWorker"][];
+        };
+        AdminQueue: {
+            snapshot_at: string;
+            epoch: string;
+            total: number;
+            offset: number;
+            limit: number;
+            items: components["schemas"]["AdminJob"][];
+        };
     };
     responses: {
         BadRequest: {
@@ -243,6 +468,11 @@ export interface components {
         };
     };
     parameters: {
+        AdminModel: string;
+        AdminWorkerState: "online-idle" | "online-busy" | "offline";
+        AdminJobState: "queued" | "leased" | "done" | "failed" | "expired";
+        AdminOffset: number;
+        AdminLimit: number;
         WorkerVersion: string;
         RequestID: string;
         JobID: string;
@@ -253,6 +483,208 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    adminSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSession"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    adminLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminLogin"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    adminLogout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    adminSummary: {
+        parameters: {
+            query?: {
+                model?: components["parameters"]["AdminModel"];
+            };
+            header?: {
+                "X-Request-ID"?: components["parameters"]["RequestID"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    adminApi: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminApi"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    adminWorkers: {
+        parameters: {
+            query?: {
+                model?: components["parameters"]["AdminModel"];
+                state?: components["parameters"]["AdminWorkerState"];
+                offset?: components["parameters"]["AdminOffset"];
+                limit?: components["parameters"]["AdminLimit"];
+            };
+            header?: {
+                "X-Request-ID"?: components["parameters"]["RequestID"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminWorkers"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    adminQueue: {
+        parameters: {
+            query?: {
+                model?: components["parameters"]["AdminModel"];
+                state?: components["parameters"]["AdminJobState"];
+                offset?: components["parameters"]["AdminOffset"];
+                limit?: components["parameters"]["AdminLimit"];
+            };
+            header?: {
+                "X-Request-ID"?: components["parameters"]["RequestID"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminQueue"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
     workerHello: {
         parameters: {
             query?: never;

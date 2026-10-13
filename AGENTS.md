@@ -57,8 +57,10 @@ in the private `ops` repository, never here.
 - **Workers accept no inbound connections.** Outbound HTTPS (long-poll) to the server only.
   Ollama listens on `127.0.0.1` only.
 - **Go, standard library first.** A third-party dependency in the server needs a written reason.
-  The only dependency is `golang.org/x/crypto/blake2b`, used by the worker's updater for
-  minisign; `TestServerHasNoThirdPartyDeps` keeps it out of the server.
+  Worker-only dependencies are `golang.org/x/crypto/blake2b` for minisign and
+  `golang.org/x/sys/windows` for native SCM and token ACL handling. The workspace
+  Windows ADR records this decision; `TestServerHasNoThirdPartyDeps` keeps
+  third-party packages out of the server.
 - **Worker updates are signed, atomic and reversible.** A binary whose signature does not
   verify is never applied.
 - Everything in this repository — code, comments, docs, commit messages — is in English.
@@ -132,3 +134,10 @@ tests, packed independent consumers and real Go HTTP-server integration. Run
 The local menu-bar application is built with `./scripts/build-macos-app.sh` on macOS.
 Lifecycle, headless CLI opt-in and native verification are documented in
 `docs/macos-menu-bar.md`.
+
+Windows desktop builds use `./scripts/build-windows-worker.ps1`; the portable
+`dumb-worker.exe` includes its native tray; `dumb-tray.exe` remains an optional
+compatibility helper. Isolated Windows development,
+SCM lifecycle, inert tray acceptance and no-reboot/no-host-interference rules
+are documented in `docs/windows-worker.md`. Private host coordinates belong
+only in the workspace/private documentation.

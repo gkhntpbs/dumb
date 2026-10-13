@@ -5,7 +5,8 @@
 | `scripts/unit-tests.sh` | Unit tests (`go test ./...`) |
 | `scripts/clean-results.sh [--dry-run]` | Removes test output |
 | `scripts/recovery-lab.sh` | Fresh serial Ollama recovery fault fixtures, bounded scratch, per-process macOS RSS; no real installers/models/11434 |
-| `scripts/build-gate.sh` | clean → unit tests (`QA_STRICT=1`); the gate in front of every build |
+| `scripts/build-gate.sh` | clean → unit tests (`QA_STRICT=1`) → named admin authorization/listener/snapshot/panel regressions; the gate in front of every build |
+| `../scripts/admin-preview.sh` | Opt-in admin panel preview on a random loopback port with closed in-process fixtures (no Ollama, no models) for browser acceptance screenshots |
 
 No UI tests (qa=none). Unit tests live next to the code, Go-style (`*_test.go`).
 

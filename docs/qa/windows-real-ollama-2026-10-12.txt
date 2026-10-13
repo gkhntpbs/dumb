@@ -1,0 +1,11 @@
+=== RUN   TestOfficialWindowsOllamaLifecycle
+    lifecycle_test.go:85: official installation ready version=0.40.3 model=smollm2:135m owned=true
+    lifecycle_test.go:95: real DUMB queue generated a nonempty response with a tiny model
+    lifecycle_test.go:108: real DUMB queue generated a nonempty response with a tiny model
+    lifecycle_test.go:109: real queue job passed before and after owned process crash/recovery
+    lifecycle_test.go:125: existing endpoint preserved by external manager and cancellation
+    lifecycle_test.go:157: real DUMB queue generated a nonempty response with a tiny model
+    lifecycle_test.go:176: owned uninstall/reinstall preserved downloaded models; actual worker setup passed
+--- PASS: TestOfficialWindowsOllamaLifecycle (43.31s)
+PASS
+ok  	github.com/gkhntpbs/dumb/internal/ollama/e2e/windows	43.778s

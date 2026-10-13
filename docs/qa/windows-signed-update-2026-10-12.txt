@@ -1,0 +1,9 @@
+=== RUN   TestSignedWindowsWorkerLifecycle
+    windows_test.go:187: PASS: Windows GUI subsystem=2, CREATE_NO_WINDOW enabled, visible owned windows=0
+    windows_test.go:194: PASS: signed 0.1.0 -> 426 -> 0.2.0 -> exit 4 -> real process restart -> hello -> commit
+    windows_test.go:201: PASS: Windows GUI subsystem=2, CREATE_NO_WINDOW enabled, visible owned windows=0
+    windows_test.go:213: PASS: wrong-key signature refused; running worker remains alive and byte-identical
+    windows_test.go:243: PASS: three unsuccessful real starts -> mapped-exe rollback -> exit 4 -> old worker restart; bad version skipped
+--- PASS: TestSignedWindowsWorkerLifecycle (7.03s)
+PASS
+ok  	github.com/gkhntpbs/dumb/internal/update/e2e/windowse2e	7.527s

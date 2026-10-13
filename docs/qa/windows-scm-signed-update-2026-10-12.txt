@@ -1,0 +1,14 @@
+=== RUN   TestSignedWindowsSCMUpdateAndRecovery
+    scm_windows_test.go:273: PASS: Windows GUI subsystem=2, CREATE_NO_WINDOW enabled, visible owned windows=0
+    scm_windows_test.go:274: PASS: production SCM recovery policy; signed old mapped worker exit=4 -> automatic native restart with changed PID -> actual 0.2.0 hello -> commit
+    scm_windows_test.go:291: PASS: terminate exact owned service PID -> production second failure action -> automatic native restart and 0.2.0 hello
+    scm_windows_test.go:301: PASS: explicit SCM Stop exits cleanly with zero Win32/service-specific codes; recovery is not triggered
+    scm_windows_test.go:324: PASS: Windows GUI subsystem=2, CREATE_NO_WINDOW enabled, visible owned windows=0
+    scm_windows_test.go:325: PASS: wrong-key signature rejected at startup and minimum-version retry; native SCM worker stays on same PID and original byte-identical executable
+    scm_windows_test.go:206: PASS: exact owned SCM update service deleted
+    scm_windows_test.go:206: PASS: exact owned SCM update service deleted
+--- PASS: TestSignedWindowsSCMUpdateAndRecovery (11.56s)
+PASS
+ok  	github.com/gkhntpbs/dumb/internal/update/e2e/windowse2e	12.007s
+PASS: Windows PowerShell wrapper parser reported no errors
+PASS: post-run inspection: QA services=0, default API listeners=0, owned Ollama processes=0

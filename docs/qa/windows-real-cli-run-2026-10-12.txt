@@ -1,0 +1,5 @@
+=== RUN   TestActualWindowsWorkerWithInstalledOllama
+    cli_test.go:153: actual GUI-subsystem headless worker served a real tiny-model DUMB job; forced worker exit removed owned Ollama and all observed model descendants
+--- PASS: TestActualWindowsWorkerWithInstalledOllama (4.66s)
+PASS
+ok  	github.com/gkhntpbs/dumb/internal/ollama/e2e/windows	5.133s

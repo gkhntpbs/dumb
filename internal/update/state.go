@@ -103,6 +103,11 @@ func (p *Probation) logf(format string, args ...any) {
 func Startup(exe, version string, window time.Duration, maxAttempts int, logger *log.Logger) (*Probation, error) {
 	st, ok, err := readState(exe)
 	if !ok {
+		if err == nil {
+			// The prior rolled-back image was locked until its process exited on Windows.
+			// A fresh start has no pending probation and can remove the stale image.
+			_ = os.Remove(exe + ".bad")
+		}
 		return nil, err
 	}
 	p := &Probation{Exe: exe, From: st.From, To: st.To, Window: window, Logger: logger}

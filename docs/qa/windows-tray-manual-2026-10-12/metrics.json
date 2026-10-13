@@ -1,0 +1,9 @@
+{
+  "fixture": "inert Windows tray preview",
+  "startupForegroundUnchanged": true,
+  "startupVisibleOwnedWindowCount": 0,
+  "nativeHelperCount": 1,
+  "notificationAreaCaptured": true,
+  "menuCaptured": true,
+  "durationSeconds": 120
+}

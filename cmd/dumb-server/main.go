@@ -15,6 +15,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -73,6 +74,24 @@ func run() error {
 	addr := env("DUMB_ADDR", "127.0.0.1:8080")
 	logger.Info("dumb-server starting", "version", version, "protocol", protocol.Version, "addr", addr)
 	hs := &http.Server{Addr: addr, Handler: srv, ReadHeaderTimeout: 10 * time.Second}
+	if adminAddr := os.Getenv("DUMB_ADMIN_ADDR"); adminAddr != "" {
+		listener, err := server.ListenAdmin(adminAddr)
+		if err != nil {
+			return err
+		}
+		defer listener.Close()
+		adminServer := &http.Server{Handler: srv.AdminHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
+		failures := make(chan error, 2)
+		go func() { failures <- adminServer.Serve(listener) }()
+		go func() { failures <- hs.ListenAndServe() }()
+		defer hs.Close()
+		defer adminServer.Close()
+		err = <-failures
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}
 	return hs.ListenAndServe()
 }
 
@@ -136,8 +155,8 @@ func loadTokens(path string) (*auth.StaticTokens, error) {
 			continue
 		}
 		fs := strings.Fields(line)
-		if len(fs) != 3 || (fs[1] != string(auth.RoleWorker) && fs[1] != string(auth.RoleCaller)) || len(fs[2]) != 64 {
-			return nil, fmt.Errorf("%s:%d: want \"<id> <worker|caller> <sha256-hex>\"", path, n)
+		if len(fs) != 3 || (fs[1] != string(auth.RoleWorker) && fs[1] != string(auth.RoleCaller) && fs[1] != string(auth.RoleAdminRead)) || len(fs[2]) != 64 {
+			return nil, fmt.Errorf("%s:%d: want \"<id> <worker|caller|admin-read> <sha256-hex>\"", path, n)
 		}
 		tokens.AddHash(fs[0], auth.Role(fs[1]), strings.ToLower(fs[2]))
 	}

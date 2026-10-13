@@ -170,3 +170,27 @@ func TestRecoveryInstallerSizeAndExistingFile(t *testing.T) {
 		t.Fatal("existing installer file overwritten")
 	}
 }
+
+func TestWindowsStartKeepsOwnedHandleAndStopsOnlyOwned(t *testing.T) {
+	system, _, _ := fakeSystem("windows", []string{"ollama.exe"}, recoveryOfflineClient(t))
+	system.LookPath = func(string) (string, error) { return "ollama.exe", nil }
+	runner := &countedManagedRunner{}
+	system.Runner = runner
+	for range 2 {
+		if err := system.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if runner.count != 1 || !system.Owned() {
+		t.Fatalf("owned=%v starts=%d", system.Owned(), runner.count)
+	}
+	if err := system.StopOwned(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if system.Owned() {
+		t.Fatal("stopped child still owned")
+	}
+	if err := system.StopOwned(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -13,6 +13,10 @@ type Process interface {
 	Stop(context.Context) error
 }
 
+type EnvironmentProcessRunner interface {
+	StartManagedEnvironment(string, []string, ...string) (Process, error)
+}
+
 type ProcessRunner interface {
 	StartManaged(string, ...string) (Process, error)
 }
@@ -21,6 +25,8 @@ type ownedProcess struct {
 	command *exec.Cmd
 	done    chan struct{}
 }
+
+func (p *ownedProcess) PID() int { return p.command.Process.Pid }
 
 func (p *ownedProcess) Running() bool {
 	select {
@@ -34,7 +40,7 @@ func (p *ownedProcess) Stop(ctx context.Context) error {
 	if !p.Running() {
 		return nil
 	}
-	if err := p.command.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := interruptOwned(p.command.Process); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
 	select {
@@ -54,16 +60,28 @@ func (p *ownedProcess) Stop(ctx context.Context) error {
 }
 
 func (ExecRunner) StartManaged(name string, args ...string) (Process, error) {
+	return (ExecRunner{}).StartManagedEnvironment(name, nil, args...)
+}
+
+func (ExecRunner) StartManagedEnvironment(name string, environment []string, args ...string) (Process, error) {
 	command := exec.Command(name, args...)
 	detach(command)
-	command.Env = append(os.Environ(), "OLLAMA_HOST=127.0.0.1:11434")
+	command.Env = append(os.Environ(), environment...)
+	command.Env = append(command.Env, "OLLAMA_HOST=127.0.0.1:11434")
 	command.Stdout, command.Stderr = os.Stderr, os.Stderr
 	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	cleanup, err := attachOwnedProcess(command)
+	if err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
 		return nil, err
 	}
 	process := &ownedProcess{command: command, done: make(chan struct{})}
 	go func() {
 		_ = command.Wait()
+		cleanup()
 		close(process.done)
 	}()
 	return process, nil
@@ -85,4 +103,18 @@ func (s *System) StopOwned(ctx context.Context) error {
 		s.process = nil
 	}
 	return err
+}
+
+// OwnedPID is a scoped diagnostic handle for the worker's own child only.
+// Unknown or already exited processes are never returned for recovery actions.
+func (s *System) OwnedPID() int {
+	s.processMu.Lock()
+	defer s.processMu.Unlock()
+	if s.process == nil || !s.process.Running() {
+		return 0
+	}
+	if process, ok := s.process.(interface{ PID() int }); ok {
+		return process.PID()
+	}
+	return 0
 }

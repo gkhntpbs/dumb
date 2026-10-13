@@ -10,14 +10,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"sync"
+	"time"
 )
 
 // Role separates the two audiences of the server.
 type Role string
 
 const (
-	RoleWorker Role = "worker"
-	RoleCaller Role = "caller"
+	RoleWorker    Role = "worker"
+	RoleCaller    Role = "caller"
+	RoleAdminRead Role = "admin-read"
 )
 
 // Principal is an authenticated identity.
@@ -44,6 +46,7 @@ func HashToken(token string) string {
 type entry struct {
 	p       Principal
 	revoked bool
+	expires time.Time
 }
 
 // StaticTokens is a revocable, in-memory token table keyed by token hash.
@@ -93,8 +96,19 @@ func (s *StaticTokens) Authenticate(token string) (Principal, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	e, ok := s.byHash[HashToken(token)]
-	if !ok || e.revoked {
+	if !ok || e.revoked || !e.expires.IsZero() && !time.Now().Before(e.expires) {
 		return Principal{}, ErrUnauthorized
 	}
 	return e.p, nil
+}
+
+func (s *StaticTokens) AddUntil(id string, role Role, token string, expires time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if old, ok := s.byID[id]; ok {
+		delete(s.byHash, old)
+	}
+	h := HashToken(token)
+	s.byHash[h] = &entry{p: Principal{ID: id, Role: role}, expires: expires}
+	s.byID[id] = h
 }

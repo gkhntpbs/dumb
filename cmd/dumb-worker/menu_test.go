@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -224,6 +225,9 @@ func TestMenuHelperLocationAndHeadlessOptIn(t *testing.T) {
 	if err != nil || !c.headless {
 		t.Fatalf("headless flag: %+v %v", c, err)
 	}
+	if runtime.GOOS == "windows" {
+		return
+	}
 	if _, err := menuHelper("/tmp/dumb-worker"); err == nil {
 		t.Fatal("unbundled CLI silently accepted")
 	}
@@ -326,5 +330,26 @@ func TestMenuPreviewDuration(t *testing.T) {
 		if (err == nil) != test.valid || duration != test.duration {
 			t.Fatalf("duration %q: %v %v", test.raw, duration, err)
 		}
+	}
+}
+
+func TestWindowsHelperMustBeRegularSibling(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "dumb-worker.exe")
+	if _, err := windowsMenuHelper(exe); err == nil {
+		t.Fatal("missing tray accepted")
+	}
+	helper := filepath.Join(filepath.Dir(exe), "dumb-tray.exe")
+	if err := os.Mkdir(helper, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := windowsMenuHelper(exe); err == nil {
+		t.Fatal("directory accepted")
+	}
+	os.Remove(helper)
+	if err := os.WriteFile(helper, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := windowsMenuHelper(exe); err != nil || got != helper {
+		t.Fatalf("%s %v", got, err)
 	}
 }

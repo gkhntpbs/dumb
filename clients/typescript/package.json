@@ -20,8 +20,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "generate": "node scripts/generate.mjs",
-    "check:contract": "node scripts/generate.mjs --check",
+    "generate": "node scripts/generate.mjs && node scripts/generate-admin.mjs",
+    "check:contract": "node scripts/generate.mjs --check && node scripts/generate-admin.mjs --check",
     "build": "tsc -p tsconfig.json",
     "test:unit": "node --test test/client.test.mjs",
     "test:package": "node scripts/check-package.mjs",

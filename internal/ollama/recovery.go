@@ -17,7 +17,15 @@ var ErrExternalEndpoint = errors.New("ollama: configured or previously running e
 var ErrOccupiedEndpoint = errors.New("ollama: endpoint is occupied or unresponsive; refusing to install or start over it")
 var ErrRecoveryBackoff = errors.New("ollama: recovery is cooling down")
 
+type RecoveryProgress struct {
+	Stage     string
+	Model     string
+	Completed int64
+	Total     int64
+}
+
 type RecoveryConfig struct {
+	Progress                                                                                              func(RecoveryProgress)
 	System                                                                                                *System
 	Models                                                                                                []string
 	External                                                                                              bool
@@ -74,7 +82,7 @@ func NewRecovery(cfg RecoveryConfig) (*Recovery, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(io.Discard, "", 0)
 	}
-	external := cfg.External || cfg.System.GOOS != "darwin" || cfg.System.Client.base.String() != DefaultURL
+	external := cfg.External || (cfg.System.GOOS != "darwin" && cfg.System.GOOS != "windows") || cfg.System.Client.base.String() != DefaultURL
 	return &Recovery{cfg: cfg, external: external}, nil
 }
 
@@ -85,7 +93,14 @@ func (r *Recovery) probe(ctx context.Context) error {
 	return err
 }
 
+func (r *Recovery) progress(stage, model string, completed, total int64) {
+	if r.cfg.Progress != nil {
+		r.cfg.Progress(RecoveryProgress{Stage: stage, Model: model, Completed: completed, Total: total})
+	}
+}
+
 func (r *Recovery) attempt(ctx context.Context) error {
+	r.progress("checking", "", 0, 0)
 	system := r.cfg.System
 	if r.restart.Swap(false) && system.Owned() {
 		stop, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -97,6 +112,7 @@ func (r *Recovery) attempt(ctx context.Context) error {
 	}
 	err := r.probe(ctx)
 	if err == nil {
+		r.progress("reachable", "", 0, 0)
 		if !system.Owned() {
 			r.external = true
 		}
@@ -120,18 +136,25 @@ func (r *Recovery) attempt(ctx context.Context) error {
 			}
 		}
 		if err != nil {
-			if !errors.Is(err, syscall.ECONNREFUSED) {
-				return ErrOccupiedEndpoint
+			if !isConnectionRefused(err) {
+				return fmt.Errorf("%w: %v", ErrOccupiedEndpoint, err)
 			}
+			r.progress("detecting", "", 0, 0)
 			detected := system.Detect(ctx)
+			if detected.Installed {
+				r.progress("found", "", 0, 0)
+			}
 			if !detected.Installed {
+				r.progress("installing", "", 0, 0)
 				install, cancel := context.WithTimeout(ctx, r.cfg.InstallTimeout)
 				err = system.Install(install)
 				cancel()
 				if err != nil {
 					return fmt.Errorf("ollama: install: %w", err)
 				}
+				r.progress("installed", "", 0, 0)
 			}
+			r.progress("starting", "", 0, 0)
 			if err := system.Start(ctx); err != nil {
 				return fmt.Errorf("ollama: start: %w", err)
 			}
@@ -143,6 +166,7 @@ func (r *Recovery) attempt(ctx context.Context) error {
 			}
 		}
 	}
+	r.progress("api-ready", "", 0, 0)
 	probe, cancel := context.WithTimeout(ctx, r.cfg.ProbeTimeout)
 	models, err := system.Client.List(probe)
 	cancel()
@@ -157,10 +181,12 @@ func (r *Recovery) attempt(ctx context.Context) error {
 	}
 	for _, model := range r.cfg.Models {
 		if HasModel(models, model) {
+			r.progress("model-ready", model, 0, 0)
 			continue
 		}
 		pull, cancel := context.WithTimeout(ctx, r.cfg.PullTimeout)
-		err = system.Client.Pull(pull, model, nil)
+		r.progress("pulling", model, 0, 0)
+		err = system.Client.Pull(pull, model, func(p Progress) { r.progress("pulling", model, p.Completed, p.Total) })
 		cancel()
 		if err != nil {
 			return fmt.Errorf("ollama: pull configured model: %w", err)
@@ -177,6 +203,7 @@ func (r *Recovery) attempt(ctx context.Context) error {
 			return errors.New("ollama: configured model absent after recovery")
 		}
 	}
+	r.progress("ready", "", 0, 0)
 	return nil
 }
 
@@ -226,7 +253,7 @@ func (r *Recovery) Close(ctx context.Context) error { return r.cfg.System.StopOw
 
 func (r *Recovery) ReportFailure(err error) {
 	var api *APIError
-	if (errors.As(err, &api) && api.Status >= 500) || errors.Is(err, syscall.ECONNREFUSED) {
+	if (errors.As(err, &api) && api.Status >= 500) || isConnectionRefused(err) {
 		r.restart.Store(true)
 	}
 }

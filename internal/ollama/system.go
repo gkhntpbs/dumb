@@ -19,7 +19,7 @@ import (
 const (
 	LinuxInstallScript = "curl -fsSL https://ollama.com/install.sh | sh"
 	MacOSDownloadURL   = "https://ollama.com/download/Ollama-darwin.zip"
-	WindowsDownloadURL = "https://ollama.com/download/OllamaSetup.exe"
+	WindowsDownloadURL = "https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.zip"
 )
 
 // Runner executes commands. Tests replace it so nothing touches the real system.
@@ -35,6 +35,7 @@ type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
+	hideConsole(cmd)
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
@@ -53,38 +54,45 @@ func (ExecRunner) Start(name string, args ...string) error {
 
 // System holds every seam Detect, Install and Start use to touch the machine.
 type System struct {
-	GOOS            string
-	Home            string
-	LocalAppData    string // Windows %LOCALAPPDATA%
-	LookPath        func(string) (string, error)
-	Stat            func(string) (fs.FileInfo, error)
-	Writable        func(dir string) bool
-	Download        func(ctx context.Context, url, dst string) error
-	TempDir         func() (string, error)
-	Runner          Runner
-	Client          *Client
-	FS              InstallFileSystem
-	ValidateArchive func(string) error
-	processMu       sync.Mutex
-	process         Process
+	GOOS                 string
+	Home                 string
+	LocalAppData         string // Windows %LOCALAPPDATA%
+	WindowsDataDir       string // optional owned portable install/model root
+	WindowsModelsDir     string
+	WindowsArchive       string // optional securely relayed official archive
+	WindowsArchiveSHA256 string // required SHA256 for a local archive
+	LookPath             func(string) (string, error)
+	Stat                 func(string) (fs.FileInfo, error)
+	Writable             func(dir string) bool
+	Download             func(ctx context.Context, url, dst string) error
+	TempDir              func() (string, error)
+	Runner               Runner
+	Client               *Client
+	FS                   InstallFileSystem
+	ValidateArchive      func(string) error
+	processMu            sync.Mutex
+	process              Process
 }
 
 // NewSystem returns a System wired to the real machine.
 func NewSystem(c *Client) *System {
 	home, _ := os.UserHomeDir()
 	return &System{
-		GOOS:            runtime.GOOS,
-		Home:            home,
-		LocalAppData:    os.Getenv("LOCALAPPDATA"),
-		LookPath:        exec.LookPath,
-		Stat:            os.Stat,
-		Writable:        dirWritable,
-		Download:        download,
-		TempDir:         func() (string, error) { return os.MkdirTemp("", "dumb-ollama-") },
-		Runner:          ExecRunner{},
-		Client:          c,
-		FS:              OSInstallFileSystem{},
-		ValidateArchive: ValidateMacArchive,
+		GOOS:                 runtime.GOOS,
+		Home:                 home,
+		LocalAppData:         os.Getenv("LOCALAPPDATA"),
+		WindowsDataDir:       os.Getenv("DUMB_OLLAMA_DATA_DIR"),
+		WindowsArchive:       os.Getenv("DUMB_OLLAMA_INSTALL_ARCHIVE"),
+		WindowsArchiveSHA256: os.Getenv("DUMB_OLLAMA_INSTALL_SHA256"),
+		LookPath:             exec.LookPath,
+		Stat:                 os.Stat,
+		Writable:             dirWritable,
+		Download:             download,
+		TempDir:              func() (string, error) { return os.MkdirTemp("", "dumb-ollama-") },
+		Runner:               ExecRunner{},
+		Client:               c,
+		FS:                   OSInstallFileSystem{},
+		ValidateArchive:      ValidateMacArchive,
 	}
 }
 
@@ -110,7 +118,7 @@ func (s *System) KnownPaths() []string {
 		if s.LocalAppData == "" {
 			return nil
 		}
-		return []string{filepath.Join(s.LocalAppData, "Programs", "Ollama", "ollama.exe")}
+		return []string{filepath.Join(s.LocalAppData, "Programs", "Ollama", "ollama.exe"), s.windowsBinary()}
 	default:
 		return []string{"/usr/local/bin/ollama", "/usr/bin/ollama"}
 	}
@@ -148,15 +156,7 @@ func (s *System) Install(ctx context.Context) error {
 	case "darwin":
 		return s.installMac(ctx)
 	case "windows":
-		tmp, err := s.TempDir()
-		if err != nil {
-			return err
-		}
-		exe := filepath.Join(tmp, "OllamaSetup.exe")
-		if err := s.Download(ctx, WindowsDownloadURL, exe); err != nil {
-			return err
-		}
-		return s.Runner.Run(ctx, exe, "/VERYSILENT")
+		return s.installWindows(ctx)
 	default:
 		return fmt.Errorf("ollama: automatic install is not supported on %s; see https://ollama.com/download", s.GOOS)
 	}
@@ -175,7 +175,7 @@ func (s *System) Start(ctx context.Context) error {
 		return errors.New("ollama: not installed")
 	}
 	switch s.GOOS {
-	case "darwin":
+	case "darwin", "windows":
 		s.processMu.Lock()
 		defer s.processMu.Unlock()
 		if err := ctx.Err(); err != nil {
@@ -191,6 +191,30 @@ func (s *System) Start(ctx context.Context) error {
 		if _, err := s.Stat(binary); err != nil {
 			return err
 		}
+		ownedWindows := filepath.Clean(binary) == filepath.Clean(s.windowsBinary())
+		if s.GOOS == "windows" && (ownedWindows || s.WindowsModelsDir != "") {
+			if runner, ok := s.Runner.(EnvironmentProcessRunner); ok {
+				var extra []string
+				if ownedWindows {
+					extra = append(extra, "USERPROFILE="+filepath.Join(s.windowsRoot(), "home"))
+				}
+				if os.Getenv("OLLAMA_MODELS") == "" {
+					models := s.WindowsModelsDir
+					if models == "" && ownedWindows {
+						models = filepath.Join(s.windowsRoot(), "models")
+					}
+					if models != "" {
+						extra = append(extra, "OLLAMA_MODELS="+models)
+					}
+				}
+				process, err := runner.StartManagedEnvironment(binary, extra, "serve")
+				if err != nil {
+					return err
+				}
+				s.process = process
+				return nil
+			}
+		}
 		if runner, ok := s.Runner.(ProcessRunner); ok {
 			process, err := runner.StartManaged(binary, "serve")
 			if err != nil {
@@ -204,8 +228,6 @@ func (s *System) Start(ctx context.Context) error {
 		if err := s.Runner.Run(ctx, "systemctl", "start", "ollama"); err == nil {
 			return nil
 		}
-		return s.Runner.Start(d.Path, "serve")
-	case "windows":
 		return s.Runner.Start(d.Path, "serve")
 	default:
 		return s.Runner.Start(d.Path, "serve")

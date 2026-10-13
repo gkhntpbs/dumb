@@ -29,11 +29,13 @@ const MaxBodyBytes = 1 << 20
 const DefaultAckWindow = 2 * time.Second
 
 type Config struct {
+	AdminSessions    AdminSessionProvider // optional browser authentication; implementation belongs to the embedding application
 	Auth             auth.Authenticator
-	MinWorkerVersion string        // e.g. "0.1.0"
-	MaxWait          time.Duration // cap on GET /v1/jobs/next?wait=; default 25s
-	OnlineTTL        time.Duration // a worker is online this long after its last request; default MaxWait+10s
-	Logger           *slog.Logger  // default: discard. Never receives tokens, prompts or outputs.
+	MinWorkerVersion string           // e.g. "0.1.0"
+	MaxWait          time.Duration    // cap on GET /v1/jobs/next?wait=; default 25s
+	OnlineTTL        time.Duration    // a worker is online this long after its last request; default MaxWait+10s
+	Now              func() time.Time // clock for worker freshness and admin observations; default time.Now
+	Logger           *slog.Logger     // default: discard. Never receives tokens, prompts or outputs.
 	// AckWindow is how long a worker that announced the "ack" feature has to
 	// acknowledge an assignment before its lease is revoked and the job goes
 	// back to the front of the queue. Never beyond the job's deadline.
@@ -49,6 +51,7 @@ type Config struct {
 }
 
 type worker struct {
+	version  string
 	models   []string
 	capacity int
 	lastSeen time.Time
@@ -58,6 +61,8 @@ type worker struct {
 }
 
 type Server struct {
+	api     apiMetrics
+	epoch   time.Time
 	cfg     Config
 	min     protocol.ReleaseVersion
 	q       *queue.Queue
@@ -84,6 +89,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.MaxWait <= 0 {
 		cfg.MaxWait = 25 * time.Second
 	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
 	if cfg.OnlineTTL <= 0 {
 		cfg.OnlineTTL = cfg.MaxWait + 10*time.Second
 	}
@@ -96,11 +104,12 @@ func New(cfg Config) (*Server, error) {
 	cfg.WorkerRate = cfg.WorkerRate.orDefault(DefaultWorkerRate)
 	cfg.CallerRate = cfg.CallerRate.orDefault(DefaultCallerRate)
 	cfg.UnauthRate = cfg.UnauthRate.orDefault(DefaultUnauthRate)
-	s := &Server{cfg: cfg, min: min, q: queue.New(), mux: http.NewServeMux(), workers: map[string]*worker{}, log: cfg.Logger,
+	s := &Server{epoch: cfg.Now().UTC(), cfg: cfg, min: min, q: queue.New(), mux: http.NewServeMux(), workers: map[string]*worker{}, log: cfg.Logger,
 		workerLim: newLimiter(cfg.WorkerRate, time.Now),
 		callerLim: newLimiter(cfg.CallerRate, time.Now),
 		unauthLim: newLimiter(cfg.UnauthRate, time.Now),
 	}
+	s.q.SetClock(cfg.Now)
 	s.q.OnExpire = func(jobID, model, workerID string) {
 		if workerID == "" {
 			s.log.Warn("job expired", "job_id", jobID, "model", model, "was", protocol.StateQueued)
@@ -171,6 +180,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, l))
 	r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 	sw := &statusWriter{ResponseWriter: w}
+	route := apiRoute(r)
+	s.api.begin(route)
+	defer func() {
+		code := sw.code
+		if code == 0 {
+			code = http.StatusOK
+		}
+		s.api.end(route, s.cfg.Now(), code, time.Since(start))
+	}()
 	s.mux.ServeHTTP(sw, r)
 	// The path, never the query or body; job ids are not secret.
 	l.Debug("request", "method", r.Method, "path", r.URL.Path, "status", sw.code,
@@ -267,7 +285,8 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request, p auth.Principal)
 		wk = &worker{gone: make(chan struct{})}
 		s.workers[p.ID] = wk
 	}
-	wk.models, wk.capacity, wk.lastSeen = slices.Clone(req.Models), req.Capacity, time.Now()
+	wk.models, wk.capacity, wk.lastSeen = slices.Clone(req.Models), req.Capacity, s.cfg.Now()
+	wk.version = req.WorkerVersion
 	wk.ack = slices.Contains(req.Features, protocol.FeatureAck)
 	s.mu.Unlock()
 	s.reqLog(r).Info("worker hello", "worker", p.ID, "worker_version", req.WorkerVersion, "models", req.Models,
@@ -316,12 +335,12 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal)
 	}
 	models, capacity, needAck := wk.models, wk.capacity, wk.ack
 	wk.polling++
-	wk.lastSeen = time.Now()
+	wk.lastSeen = s.cfg.Now()
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
 		wk.polling--
-		wk.lastSeen = time.Now()
+		wk.lastSeen = s.cfg.Now()
 		s.mu.Unlock()
 	}()
 
@@ -505,7 +524,7 @@ func (s *Server) Status() protocol.Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := protocol.Status{Models: []string{}}
-	now := time.Now()
+	now := s.cfg.Now()
 	for _, wk := range s.workers {
 		if len(wk.models) == 0 || wk.polling == 0 && now.Sub(wk.lastSeen) > s.cfg.OnlineTTL {
 			continue
@@ -524,7 +543,7 @@ func (s *Server) Status() protocol.Status {
 func (s *Server) touch(id string) {
 	s.mu.Lock()
 	if wk := s.workers[id]; wk != nil {
-		wk.lastSeen = time.Now()
+		wk.lastSeen = s.cfg.Now()
 	}
 	s.mu.Unlock()
 }

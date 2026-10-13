@@ -9,7 +9,7 @@ anything.
 | macOS | launchd user agent (`~/Library/LaunchAgents/dumb-worker.plist`) | the logged-in user |
 | Linux | systemd user unit (`~/.config/systemd/user/dumb-worker.service`) | the user |
 | Linux, `-system` | systemd system unit (`/etc/systemd/system/dumb-worker.service`) | the dedicated `dumb` account |
-| Windows | `sc.exe` service | LocalSystem (no SCM handling yet, see `TODO.md`) |
+| Windows | `sc.exe` service | LocalSystem (native SCM handling; see `windows-worker.md`) |
 
 On macOS, `-log-dir` moves `dumb-worker.log` out of `~/Library/Logs`.
 
@@ -126,3 +126,14 @@ and exits successfully, so it remains stopped until next login or explicit
 start. Update exit 4 and crashes still restart. Existing installed plists are
 not silently rewritten; this task verified the template without installing a
 service.
+
+## Native Windows acceptance
+
+The opt-in Windows SCM fixture creates a unique manual LocalSystem service,
+serves real queue jobs through the actual worker against an inert loopback
+Ollama, stops/restarts it and deletes only that service. Token ACLs explicitly
+allow SYSTEM/Administrators and use a trusted owner. Run with
+`QA_WINDOWS_SCM=1 go test -count=1 -v -timeout 5m ./internal/service/e2e/windows`
+in PowerShell (set the environment variable separately). Actual native results:
+[Windows QA evidence](qa/windows-worker-2026-10-12.md). Service persistence across
+reboot remains unverified; no reboot is required or performed by the fixture.

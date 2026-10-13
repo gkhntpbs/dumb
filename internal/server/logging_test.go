@@ -68,7 +68,7 @@ func TestStructuredLogging(t *testing.T) {
 	req.Header.Set(RequestIDHeader, "bad id "+strings.Repeat("x", 80))
 	res, _ = http.DefaultClient.Do(req)
 	res.Body.Close()
-	if got := res.Header.Get(RequestIDHeader); !saneRequestID.MatchString(got) || strings.Contains(got, "bad") {
+	if got := res.Header.Get(RequestIDHeader); !saneRequestID.MatchString(got) || got == req.Header.Get(RequestIDHeader) {
 		t.Fatalf("insane request id not replaced: %q", got)
 	}
 

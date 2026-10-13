@@ -13,11 +13,19 @@ builds:
     ldflags:
       # The minisign public key workers verify releases against. Empty disables
       # self-update; the release workflow refuses to run without it.
-      - -s -w -X main.version={{ .Version }} -X github.com/gkhntpbs/dumb/internal/update.PublicKey={{ envOrDefault "DUMB_RELEASE_PUBLIC_KEY" "" }}
+      - -s -w {{ if eq .Os "windows" }}-H windowsgui{{ end }} -X main.version={{ .Version }} -X github.com/gkhntpbs/dumb/internal/update.PublicKey={{ envOrDefault "DUMB_RELEASE_PUBLIC_KEY" "" }}
     goos: [darwin, linux, windows]
     goarch: [amd64, arm64]
     ignore:
       - { goos: windows, goarch: arm64 }
+  - id: dumb-tray
+    main: ./cmd/dumb-tray
+    binary: dumb-tray
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: [-s -w -H windowsgui]
+    goos: [windows]
+    goarch: [amd64]
   - id: dumb-server
     main: ./cmd/dumb-server
     binary: dumb-server
@@ -33,7 +41,7 @@ builds:
 archives:
   # The worker's self-updater looks for exactly this name (internal/update.ArchiveName).
   - id: dumb-worker
-    ids: [dumb-worker]
+    ids: [dumb-worker, dumb-tray]
     name_template: "dumb-worker_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     format_overrides:

@@ -6,7 +6,7 @@ info:
     name: MIT
     identifier: MIT
   description: >
-    DUMB (Distributed User-owned Model Backend) contract. Two audiences share one
+    DUMB (Distributed User-owned Model Backend) contract. Three audiences share one
     server:
 
 
@@ -60,11 +60,157 @@ servers:
 security:
   - bearer: []
 tags:
+  - name: admin
+    description: Read-only metadata endpoints requiring the separate admin-read role.
   - name: worker
     description: Endpoints a worker calls (outbound only).
   - name: caller
     description: Endpoints an app calls to get AI work done.
 paths:
+  /admin/v1/session:
+    get:
+      tags: [admin]
+      operationId: adminSession
+      summary: Inspect the same-origin browser session.
+      security: []
+      responses:
+        "200":
+          description: Authentication state without identity or credentials; never cached.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminSession" }
+        "403": { description: Cross-origin request denied. }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /admin/v1/login:
+    post:
+      tags: [admin]
+      operationId: adminLogin
+      summary: Establish an admin browser session using a password.
+      description: >
+        Available only with an injected browser session provider. Requires JSON and an
+        exact same-origin Origin header. Production uses a Secure, HttpOnly, SameSite
+        cookie; password verification and session storage live outside the public server.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminLogin" }
+      responses:
+        "204": { description: Session cookie established. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Cross-origin request denied. }
+        "415": { description: JSON content type required. }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { description: Browser session provider is not configured. }
+  /admin/v1/logout:
+    post:
+      tags: [admin]
+      operationId: adminLogout
+      summary: Revoke the browser session and clear its cookie.
+      description: Requires an exact same-origin Origin header; safe to repeat.
+      security: []
+      responses:
+        "204": { description: Session revoked and cookie cleared. }
+        "403": { description: Cross-origin request denied. }
+        "503": { description: Browser session provider is not configured. }
+  /admin/v1/summary:
+    get:
+      tags: [admin]
+      security: [{adminCookie: []}, {bearer: []}]
+      operationId: adminSummary
+      summary: Read sanitized summary metadata.
+      description: >
+        Requires admin-read. Disabled by default and served on a separate admin listener.
+        Each response is an independent observation; worker and queue observations are
+        approximate rather than an atomic cross-source snapshot. No prompt, output,
+        token, raw error or network address is included.
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/AdminModel"
+      responses:
+        "200":
+          description: Current metadata; pagination may shift as jobs and workers change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminSummary" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /admin/v1/api:
+    get:
+      tags: [admin]
+      security: [{adminCookie: []}, {bearer: []}]
+      operationId: adminApi
+      summary: Observe public HTTP API traffic, excluding the admin listener.
+      description: >
+        Process-local completed request counters, including rejected and unknown requests.
+        The bounded rolling window contains 30 ten-second completion buckets, including
+        the current partial bucket. Latency includes long-poll waiting; active polls are
+        inflight, not failures. Serving means this API handler is responding, not that
+        workers or upstream dependencies are ready. No identities, paths, queries or bodies
+        are retained; route labels come from fixed protocol templates.
+      responses:
+        "200":
+          description: API traffic observation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminApi" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /admin/v1/workers:
+    get:
+      tags: [admin]
+      security: [{adminCookie: []}, {bearer: []}]
+      operationId: adminWorkers
+      summary: Read sanitized workers metadata.
+      description: >
+        Requires admin-read. Disabled by default and served on a separate admin listener.
+        Each response is an independent observation; worker and queue observations are
+        approximate rather than an atomic cross-source snapshot. No prompt, output,
+        token, raw error or network address is included.
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/AdminModel"
+        - $ref: "#/components/parameters/AdminWorkerState"
+        - $ref: "#/components/parameters/AdminOffset"
+        - $ref: "#/components/parameters/AdminLimit"
+      responses:
+        "200":
+          description: Current metadata; pagination may shift as jobs and workers change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminWorkers" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /admin/v1/queue:
+    get:
+      tags: [admin]
+      security: [{adminCookie: []}, {bearer: []}]
+      operationId: adminQueue
+      summary: Read sanitized queue metadata.
+      description: >
+        Requires admin-read. Disabled by default and served on a separate admin listener.
+        Each response is an independent observation; worker and queue observations are
+        approximate rather than an atomic cross-source snapshot. No prompt, output,
+        token, raw error or network address is included.
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/AdminModel"
+        - $ref: "#/components/parameters/AdminJobState"
+        - $ref: "#/components/parameters/AdminOffset"
+        - $ref: "#/components/parameters/AdminLimit"
+      responses:
+        "200":
+          description: Current metadata; pagination may shift as jobs and workers change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminQueue" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
   /v1/workers/hello:
     post:
       tags: [worker]
@@ -327,13 +473,41 @@ paths:
         "429": { $ref: "#/components/responses/TooManyRequests" }
 components:
   securitySchemes:
+    adminCookie:
+      type: apiKey
+      in: cookie
+      name: dumb_admin_session
+      description: Opaque admin browser session; only accepted when a provider is configured.
     bearer:
       type: http
       scheme: bearer
       description: >
         Per-principal opaque token. Workers and callers hold different roles; a
-        worker token cannot submit jobs and a caller token cannot claim them.
+        worker token cannot submit jobs and a caller token cannot claim them. The
+        separate admin-read role permits only admin metadata endpoints; caller and
+        worker roles cannot access them and admin-read cannot perform their operations.
   parameters:
+    AdminModel:
+      name: model
+      in: query
+      description: Exact model name. Summary filters online worker capacity only; job counts and latency remain global.
+      schema: { type: string, minLength: 1 }
+    AdminWorkerState:
+      name: state
+      in: query
+      schema: { type: string, enum: [online-idle, online-busy, offline] }
+    AdminJobState:
+      name: state
+      in: query
+      schema: { type: string, enum: [queued, leased, done, failed, expired] }
+    AdminOffset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, maximum: 10000, default: 0 }
+    AdminLimit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
     WorkerVersion:
       name: X-DUMB-Worker-Version
       in: header
@@ -382,6 +556,18 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/UpgradeError" }
   schemas:
+    AdminSession:
+      type: object
+      additionalProperties: false
+      required: [authenticated]
+      properties:
+        authenticated: { type: boolean }
+    AdminLogin:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        password: { type: string, minLength: 1, maxLength: 512 }
     Error:
       type: object
       required: [error]
@@ -501,3 +687,148 @@ components:
           type: array
           items: { type: string }
           description: Models served by at least one online worker.
+    AdminApiCounters:
+      type: object
+      additionalProperties: false
+      required: [total_requests, window_requests, inflight, success, redirects, client_errors, server_errors, unauthorized, rate_limited, mean_latency_ms]
+      properties:
+        total_requests: {type: integer, minimum: 0}
+        window_requests: {type: integer, minimum: 0}
+        inflight: {type: integer, minimum: 0}
+        success: {type: integer, minimum: 0, description: Completed 2xx responses in the rolling window.}
+        redirects: {type: integer, minimum: 0}
+        client_errors: {type: integer, minimum: 0}
+        server_errors: {type: integer, minimum: 0}
+        unauthorized: {type: integer, minimum: 0, description: Window 401 and 403 responses; included in client_errors.}
+        rate_limited: {type: integer, minimum: 0, description: Window 429 responses; included in client_errors.}
+        mean_latency_ms: {type: [number, 'null'], minimum: 0}
+    AdminApiRoute:
+      type: object
+      additionalProperties: false
+      required: [total_requests, window_requests, inflight, success, redirects, client_errors, server_errors, unauthorized, rate_limited, mean_latency_ms, route]
+      properties:
+        total_requests: {type: integer, minimum: 0}
+        window_requests: {type: integer, minimum: 0}
+        inflight: {type: integer, minimum: 0}
+        success: {type: integer, minimum: 0, description: Completed 2xx responses in the rolling window.}
+        redirects: {type: integer, minimum: 0}
+        client_errors: {type: integer, minimum: 0}
+        server_errors: {type: integer, minimum: 0}
+        unauthorized: {type: integer, minimum: 0, description: Window 401 and 403 responses; included in client_errors.}
+        rate_limited: {type: integer, minimum: 0, description: Window 429 responses; included in client_errors.}
+        mean_latency_ms: {type: [number, 'null'], minimum: 0}
+        route: {type: string, description: Fixed allowlisted method and route template or other.}
+    AdminApiBucket:
+      type: object
+      additionalProperties: false
+      required: [at, requests, client_errors, server_errors, rate_limited]
+      properties:
+        at: {type: string, format: date-time}
+        requests: {type: integer, minimum: 0}
+        client_errors: {type: integer, minimum: 0}
+        server_errors: {type: integer, minimum: 0}
+        rate_limited: {type: integer, minimum: 0}
+    AdminApi:
+      type: object
+      additionalProperties: false
+      required: [total_requests, window_requests, inflight, success, redirects, client_errors, server_errors, unauthorized, rate_limited, mean_latency_ms, snapshot_at, epoch, uptime_seconds, status, window_seconds, requests_per_second, routes, history]
+      properties:
+        total_requests: {type: integer, minimum: 0}
+        window_requests: {type: integer, minimum: 0}
+        inflight: {type: integer, minimum: 0}
+        success: {type: integer, minimum: 0, description: Completed 2xx responses in the rolling window.}
+        redirects: {type: integer, minimum: 0}
+        client_errors: {type: integer, minimum: 0}
+        server_errors: {type: integer, minimum: 0}
+        unauthorized: {type: integer, minimum: 0, description: Window 401 and 403 responses; included in client_errors.}
+        rate_limited: {type: integer, minimum: 0, description: Window 429 responses; included in client_errors.}
+        mean_latency_ms: {type: [number, 'null'], minimum: 0}
+        snapshot_at: {type: string, format: date-time}
+        epoch: {type: string, format: date-time}
+        uptime_seconds: {type: number, minimum: 0}
+        status: {type: string, enum: [serving]}
+        window_seconds: {type: integer, enum: [300]}
+        requests_per_second: {type: number, minimum: 0, description: Completed window requests divided by observed window duration (bounded by uptime).}
+        routes:
+          type: array
+          maxItems: 10
+          items: {$ref: '#/components/schemas/AdminApiRoute'}
+        history:
+          type: array
+          maxItems: 30
+          items: {$ref: '#/components/schemas/AdminApiBucket'}
+    AdminSummary:
+      type: object
+      additionalProperties: false
+      description: Current queued and leased counts exclude elapsed deadlines. Done, failed and expired are cumulative since epoch. Online slots count each worker once; offline leases remain in the global leased count. Latency covers at most 256 completed jobs in the last 300 seconds; absent samples yield null means. Model filtering affects worker capacity only.
+      required: [snapshot_at, epoch, workers_online, capacity, active_slots, free_slots, queued, leased, done, failed, expired, models, oldest_queued_ms, latency_samples, mean_wait_ms, mean_completion_ms, measurement_window_seconds]
+      properties:
+        snapshot_at: { type: string, format: date-time }
+        epoch: { type: string, format: date-time }
+        workers_online: { type: integer, minimum: 0 }
+        capacity: { type: integer, minimum: 0 }
+        active_slots: { type: integer, minimum: 0 }
+        free_slots: { type: integer, minimum: 0 }
+        queued: { type: integer, minimum: 0 }
+        leased: { type: integer, minimum: 0 }
+        done: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        expired: { type: integer, minimum: 0 }
+        models: { type: array, items: { type: string } }
+        oldest_queued_ms: { type: integer, minimum: 0 }
+        latency_samples: { type: integer, minimum: 0 }
+        mean_wait_ms: { type: [number, "null"], minimum: 0 }
+        mean_completion_ms: { type: [number, "null"], minimum: 0 }
+        measurement_window_seconds: { type: integer, const: 300 }
+    AdminWorker:
+      type: object
+      additionalProperties: false
+      description: Displayed worker identifiers are limited to 128 characters, versions to 64 characters and models to the first 100 names of at most 128 characters each. Online status uses the existing worker TTL and goodbye rules. Free slots are max(0, capacity minus live leases); live leases may exceed newly reduced capacity.
+      required: [worker_id, worker_version, models, capacity, live_leases, free_slots, last_seen, state]
+      properties:
+        worker_id: { type: string }
+        worker_version: { type: string }
+        models: { type: array, items: { type: string } }
+        capacity: { type: integer, minimum: 0 }
+        live_leases: { type: integer, minimum: 0 }
+        free_slots: { type: integer, minimum: 0 }
+        last_seen: { type: string, format: date-time }
+        state: { type: string, enum: [online-idle, online-busy, offline] }
+    AdminJob:
+      type: object
+      additionalProperties: false
+      description: Displayed model names are limited to 128 characters. Metadata for existing retained jobs only; retention is unchanged. Wait is elapsed queue time or time until the latest lease. Lists sort newest first by creation time, then by job id descending.
+      required: [job_id, model, state, created_at, deadline_at]
+      properties:
+        job_id: { type: string }
+        model: { type: string }
+        state: { type: string, enum: [queued, leased, done, failed, expired] }
+        created_at: { type: string, format: date-time }
+        deadline_at: { type: string, format: date-time }
+        leased_at: { type: string, format: date-time }
+        worker_id: { type: string }
+        wait_ms: { type: integer, minimum: 0 }
+    AdminWorkers:
+      type: object
+      additionalProperties: false
+      description: Workers sorted by worker id. Total is the filtered count before pagination. Epoch is server startup time; snapshot_at is observation time.
+      required: [snapshot_at, epoch, total, offset, limit, items]
+      properties:
+        snapshot_at: { type: string, format: date-time }
+        epoch: { type: string, format: date-time }
+        total: { type: integer, minimum: 0 }
+        offset: { type: integer, minimum: 0, maximum: 10000 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        items: { type: array, items: { $ref: "#/components/schemas/AdminWorker" } }
+    AdminQueue:
+      type: object
+      additionalProperties: false
+      description: Total is the filtered count before pagination. Epoch is server startup time; snapshot_at is observation time.
+      required: [snapshot_at, epoch, total, offset, limit, items]
+      properties:
+        snapshot_at: { type: string, format: date-time }
+        epoch: { type: string, format: date-time }
+        total: { type: integer, minimum: 0 }
+        offset: { type: integer, minimum: 0, maximum: 10000 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        items: { type: array, items: { $ref: "#/components/schemas/AdminJob" } }

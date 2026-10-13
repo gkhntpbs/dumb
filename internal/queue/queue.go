@@ -28,6 +28,8 @@ var (
 const Retention = time.Minute
 
 type job struct {
+	created  time.Time
+	leased   time.Time
 	req      protocol.SubmitRequest
 	id       string
 	deadline time.Time
@@ -43,20 +45,30 @@ type job struct {
 }
 
 type Queue struct {
-	mu      sync.Mutex
-	jobs    map[string]*job
-	pending []*job         // FIFO of queued jobs
-	leases  map[string]int // live leases per worker
-	wake    chan struct{}  // closed and replaced whenever a job is queued or a lease ends
+	completed int
+	failed    int
+	expired   int
+	samples   []measurement
+	mu        sync.Mutex
+	jobs      map[string]*job
+	pending   []*job         // FIFO of queued jobs
+	leases    map[string]int // live leases per worker
+	wake      chan struct{}  // closed and replaced whenever a job is queued or a lease ends
 
 	// OnExpire, if set, is called (without the lock held) when a job's
 	// deadline passes before it finished; workerID is "" for a queued job.
 	OnExpire func(jobID, model, workerID string)
+
+	now func() time.Time // clock for deadlines, waits and observations; time.Now unless SetClock
 }
 
 func New() *Queue {
-	return &Queue{jobs: map[string]*job{}, leases: map[string]int{}, wake: make(chan struct{})}
+	return &Queue{now: time.Now, jobs: map[string]*job{}, leases: map[string]int{}, wake: make(chan struct{})}
 }
+
+// SetClock replaces the clock used for deadlines, wait times and observations.
+// Call it before the queue is used; deadline timers still run on real time.
+func (q *Queue) SetClock(now func() time.Time) { q.now = now }
 
 // wakeLocked wakes every blocked Claim.
 func (q *Queue) wakeLocked() {
@@ -73,10 +85,12 @@ func newID() string {
 // Submit queues a job that must finish within its DeadlineMS and returns its ID.
 func (q *Queue) Submit(req protocol.SubmitRequest) string {
 	ttl := time.Duration(req.DeadlineMS) * time.Millisecond
+	now := q.now()
 	j := &job{
+		created:  now,
 		req:      req,
 		id:       newID(),
-		deadline: time.Now().Add(ttl),
+		deadline: now.Add(ttl),
 		state:    protocol.StateQueued,
 		done:     make(chan struct{}),
 	}
@@ -95,7 +109,7 @@ func (q *Queue) Submit(req protocol.SubmitRequest) string {
 func (q *Queue) Claim(ctx context.Context, workerID string, models []string, capacity int) (*protocol.Assignment, error) {
 	for {
 		q.mu.Lock()
-		now := time.Now()
+		now := q.now()
 		for i, j := range q.pending {
 			if q.leases[workerID] >= capacity {
 				break
@@ -104,6 +118,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, models []string, cap
 				continue
 			}
 			q.pending = slices.Delete(q.pending, i, i+1)
+			j.leased = now
 			j.state = protocol.StateLeased
 			j.leaseID = newID()
 			j.workerID = workerID
@@ -138,15 +153,18 @@ func (q *Queue) Complete(jobID, leaseID, workerID, output, errMsg string) error 
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	j, ok := q.jobs[jobID]
-	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID || !time.Now().Before(j.deadline) {
+	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID || !q.now().Before(j.deadline) {
 		return ErrLease
 	}
 	q.endLeaseLocked(j)
 	if errMsg != "" {
+		q.failed++
 		j.state, j.err = protocol.StateFailed, errMsg
 	} else {
+		q.completed++
 		j.state, j.output = protocol.StateDone, output
 	}
+	q.recordLocked(j, q.now())
 	q.finishLocked(j)
 	return nil
 }
@@ -157,7 +175,7 @@ func (q *Queue) Ack(jobID, leaseID, workerID string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	j, ok := q.jobs[jobID]
-	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID || !time.Now().Before(j.deadline) {
+	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID || !q.now().Before(j.deadline) {
 		return ErrLease
 	}
 	j.acked = true
@@ -188,10 +206,11 @@ func (q *Queue) Release(jobID, leaseID string) bool {
 }
 
 func (q *Queue) releaseLocked(j *job, leaseID string) bool {
-	if j.state != protocol.StateLeased || j.leaseID != leaseID || !time.Now().Before(j.deadline) {
+	if j.state != protocol.StateLeased || j.leaseID != leaseID || !q.now().Before(j.deadline) {
 		return false
 	}
 	q.endLeaseLocked(j)
+	j.leased = time.Time{}
 	j.state, j.leaseID, j.workerID = protocol.StateQueued, "", ""
 	q.pending = slices.Insert(q.pending, 0, j)
 	q.wakeLocked()
@@ -228,7 +247,7 @@ func (q *Queue) Wait(ctx context.Context, jobID string) (protocol.JobStatus, err
 	q.mu.Lock()
 	// The caller's wait is usually clamped to the deadline, so it can end a hair
 	// before the expiry timer fires; a past deadline is expired either way.
-	if !time.Now().Before(j.deadline) {
+	if !q.now().Before(j.deadline) {
 		q.expireLocked(j)
 	}
 	st := protocol.JobStatus{JobID: j.id, State: j.state, Output: j.output, Error: j.err}
@@ -275,6 +294,7 @@ func (q *Queue) expireLocked(j *job) {
 	default:
 		return
 	}
+	q.expired++
 	j.state = protocol.StateExpired
 	j.expireUnreported = true
 	q.finishLocked(j)

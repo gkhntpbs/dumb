@@ -1,0 +1,5 @@
+=== RUN   TestWindowsSCMWorker
+    windows_test.go:221: PASS: unique manual LocalSystem service created -> SCM Running -> real hello/job/result -> stop -> poll canceled/goodbye/process exited -> native restart/hello/second job/stop -> exact service deleted
+--- PASS: TestWindowsSCMWorker (2.57s)
+PASS
+ok  	github.com/gkhntpbs/dumb/internal/service/e2e/windows	3.129s

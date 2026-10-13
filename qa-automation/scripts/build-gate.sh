@@ -23,6 +23,12 @@ if [[ $urc -ne 0 ]]; then
   echo "No artefact will be built."; exit 1
 fi
 
+echo "═══════════ 1b. Admin authorization, listener and snapshot regressions ═══════════"
+# Already part of go test ./..., run by name so an admin regression is reported on its own.
+if ! (cd "$QA/.." && go test -count=1 -run 'Admin|TypesMatchSpec|PanelLifecycle' ./internal/server/... ./internal/protocol); then
+  echo "❌ GATE RED — admin regressions failed."; echo "No artefact will be built."; exit 1
+fi
+
 echo "═══════════ 2. UI tests ($QA_TOOL) ═══════════"
 gate=0
 if [[ "$QA_TOOL" == "none" ]]; then

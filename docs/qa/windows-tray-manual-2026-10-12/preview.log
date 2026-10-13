@@ -1,0 +1,21 @@
+preview started; inert fixture, no worker or sockets
+status starting active=0 category=none
+status ready active=0 category=none
+status serving active=2 category=none
+status recovering active=0 category=backend
+status error active=0 category=backend
+status updating active=0 category=none
+status starting active=0 category=none
+status ready active=0 category=none
+status serving active=2 category=none
+status recovering active=0 category=backend
+status error active=0 category=backend
+status updating active=0 category=none
+status starting active=0 category=none
+status ready active=0 category=none
+control pause
+status paused active=0 category=none
+control resume
+status ready active=0 category=none
+status serving active=2 category=none
+control quit

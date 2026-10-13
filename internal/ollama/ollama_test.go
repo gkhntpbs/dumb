@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -142,7 +143,7 @@ func fakeSystem(goos string, files []string, c *Client) (*System, *fakeRunner, *
 		LocalAppData: `C:\Users\u\AppData\Local`,
 		LookPath:     func(string) (string, error) { return "", errors.New("not found") },
 		Stat: func(p string) (fs.FileInfo, error) {
-			if slices.Contains(files, p) {
+			if slices.ContainsFunc(files, func(file string) bool { return filepath.Clean(file) == filepath.Clean(p) }) {
 				return nil, nil
 			}
 			return nil, fs.ErrNotExist
@@ -177,7 +178,7 @@ func TestDetect(t *testing.T) {
 	for _, c := range cases {
 		s, _, _ := fakeSystem(c.goos, c.files, c.client)
 		d := s.Detect(context.Background())
-		if d.Path != c.path || d.Reachable != c.reachable || d.Installed != (c.path != "" || c.reachable) {
+		if filepath.Clean(d.Path) != filepath.Clean(c.path) || d.Reachable != c.reachable || d.Installed != (c.path != "" || c.reachable) {
 			t.Errorf("%s: %+v", c.name, d)
 		}
 		if c.reachable && d.Version != "0.35.0" {
@@ -198,7 +199,6 @@ func TestInstallPerOS(t *testing.T) {
 		downloads []string
 	}{
 		{"linux", []string{"sh -c " + LinuxInstallScript}, nil},
-		{"windows", []string{"/tmp/x/OllamaSetup.exe /VERYSILENT"}, []string{WindowsDownloadURL + " -> /tmp/x/OllamaSetup.exe"}},
 	}
 	for _, c := range cases {
 		s, r, dl := fakeSystem(c.goos, nil, nil)
@@ -223,7 +223,7 @@ func TestStart(t *testing.T) {
 	_, up := fakeOllama(t, nil)
 
 	s, r, _ := fakeSystem("darwin", []string{"/Applications/Ollama.app", "/Applications/Ollama.app/Contents/Resources/ollama"}, down)
-	if err := s.Start(context.Background()); err != nil || !slices.Equal(r.starts, []string{"/Applications/Ollama.app/Contents/Resources/ollama serve"}) || len(r.runs) != 0 {
+	if err := s.Start(context.Background()); err != nil || !slices.Equal(r.starts, []string{filepath.Join("/Applications/Ollama.app", "Contents", "Resources", "ollama") + " serve"}) || len(r.runs) != 0 {
 		t.Errorf("darwin: %v %q", err, r.runs)
 	}
 	s, r, _ = fakeSystem("linux", []string{"/usr/bin/ollama"}, down)

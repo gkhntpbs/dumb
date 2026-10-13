@@ -1,0 +1,23 @@
+Windows onboarding UX verification, 2026-10-13
+PASS native worker command tests: 4.222 seconds
+PASS native Ollama tests: 0.875 seconds
+PASS native menubar tests: 0.423 seconds
+PASS final workspace build gate
+PASS actual setup summary: seven completed steps
+PASS URL retry in the same console
+PASS masked token and authentication retry
+PASS native Ctrl+V and right-click fixture input
+PASS elapsed download progress and retained model readiness
+PASS final installed startup route, real eight-token queue result
+PASS result state done, nonempty output, deadline 60000 ms, elapsed 1.4563818 seconds
+PASS same-user scoped native stop event and exact temporary task cleanup
+PASS zero owned runtime processes and no default Ollama listener before archival
+PASS ten archived model files retain their SHA256 values
+PASS default Worker, Ollama, models and home directories absent
+PASS exact owned HKCU Run registration removed
+PASS latest Desktop executable matches build SHA256
+PASS GUI PE subsystem 2; final Desktop executable not launched
+PASS fixture worker authentication HTTP 200 with version 0.1.0
+SHA256 4f0a3d40f5d06ab2f5357688a080944bbf831a80f58de57d20b4a434c44b2883
+NOT TESTED actual sign-in/reboot persistence
+NOT PUBLISHED production signed GitHub release

@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -175,7 +176,7 @@ func TestUpdateCommit(t *testing.T) {
 	if got := mustRead(t, u.Exe+".prev"); !bytes.Equal(got, old) {
 		t.Fatalf(".prev = %q", got)
 	}
-	if fi, _ := os.Stat(u.Exe); fi.Mode().Perm()&0o100 == 0 {
+	if fi, _ := os.Stat(u.Exe); runtime.GOOS != "windows" && fi.Mode().Perm()&0o100 == 0 {
 		t.Errorf("exe mode %v is not executable", fi.Mode())
 	}
 	var st state
@@ -425,5 +426,19 @@ func TestRejectsPlainHTTP(t *testing.T) {
 	src := &Source{BaseURL: "http://example.com"}
 	if _, err := src.Releases(context.Background()); err == nil || !strings.Contains(err.Error(), "https") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestStartupCleansExitedRollbackImage(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "worker")
+	if err := os.WriteFile(exe+".bad", []byte("exited rollback image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	probation, err := Startup(exe, "0.1.0", DefaultWindow, DefaultMaxAttempts, nil)
+	if err != nil || probation != nil {
+		t.Fatalf("fresh startup: probation=%v error=%v", probation, err)
+	}
+	if _, err := os.Stat(exe + ".bad"); !os.IsNotExist(err) {
+		t.Fatalf("stale rollback image remains: %v", err)
 	}
 }

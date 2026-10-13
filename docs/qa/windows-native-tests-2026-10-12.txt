@@ -1,0 +1,40 @@
+=== RUN   TestWindowsTokenACL
+=== RUN   TestWindowsTokenACL/owner
+=== RUN   TestWindowsTokenACL/system-admin
+=== RUN   TestWindowsTokenACL/everyone
+=== RUN   TestWindowsTokenACL/authenticated-users
+=== RUN   TestWindowsTokenACL/everyone-write
+=== RUN   TestWindowsTokenACL/everyone-change-acl
+=== RUN   TestWindowsTokenACL/everyone-change-owner
+--- PASS: TestWindowsTokenACL (0.00s)
+    --- PASS: TestWindowsTokenACL/owner (0.00s)
+    --- PASS: TestWindowsTokenACL/system-admin (0.00s)
+    --- PASS: TestWindowsTokenACL/everyone (0.00s)
+    --- PASS: TestWindowsTokenACL/authenticated-users (0.00s)
+    --- PASS: TestWindowsTokenACL/everyone-write (0.00s)
+    --- PASS: TestWindowsTokenACL/everyone-change-acl (0.00s)
+    --- PASS: TestWindowsTokenACL/everyone-change-owner (0.00s)
+PASS
+ok  	github.com/gkhntpbs/dumb/internal/worker	0.472s
+=== RUN   TestWindowsOwnedChild
+--- PASS: TestWindowsOwnedChild (0.23s)
+=== RUN   TestWindowsChildrenHaveNoConsole
+--- PASS: TestWindowsChildrenHaveNoConsole (0.00s)
+=== RUN   TestWindowsStartKeepsOwnedHandleAndStopsOnlyOwned
+--- PASS: TestWindowsStartKeepsOwnedHandleAndStopsOnlyOwned (0.00s)
+PASS
+ok  	github.com/gkhntpbs/dumb/internal/ollama	0.736s
+=== RUN   TestWindowsRunningExecutableSwapRollback
+--- PASS: TestWindowsRunningExecutableSwapRollback (0.47s)
+=== RUN   TestUpdateZipOnWindows
+--- PASS: TestUpdateZipOnWindows (0.01s)
+PASS
+ok  	github.com/gkhntpbs/dumb/internal/update	0.921s
+=== RUN   TestWindowsHelperMustBeRegularSibling
+--- PASS: TestWindowsHelperMustBeRegularSibling (0.00s)
+=== RUN   TestWindowsServiceStopCancelsOnlyOwnedWorker
+--- PASS: TestWindowsServiceStopCancelsOnlyOwnedWorker (0.00s)
+=== RUN   TestWindowsServiceRestartExitIsServiceSpecific
+--- PASS: TestWindowsServiceRestartExitIsServiceSpecific (0.00s)
+PASS
+ok  	github.com/gkhntpbs/dumb/cmd/dumb-worker	0.486s

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
+	"time"
 
 	"github.com/gkhntpbs/dumb/internal/menubar"
 	"github.com/gkhntpbs/dumb/internal/worker"
@@ -63,6 +66,9 @@ func (v *menuView) status() menubar.Status {
 }
 
 func menuHelper(exe string) (string, error) {
+	if runtime.GOOS == "windows" {
+		return windowsMenuHelper(exe)
+	}
 	path := filepath.Join(filepath.Dir(exe), "..", "Resources", "DUMBMenu.app", "Contents", "MacOS", "dumb-menu")
 	if filepath.Base(filepath.Dir(exe)) != "MacOS" {
 		return "", fmt.Errorf("macOS run requires the application bundle or explicit -headless")
@@ -75,4 +81,27 @@ func menuHelper(exe string) (string, error) {
 		return "", fmt.Errorf("menu helper is not executable")
 	}
 	return path, nil
+}
+
+func windowsMenuHelper(exe string) (string, error) {
+	path := filepath.Join(filepath.Dir(exe), "dumb-tray.exe")
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("tray helper missing: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("tray helper is not a regular file")
+	}
+	return path, nil
+}
+
+func startMenuSession(ctx context.Context, exe string) (*menubar.Session, error) {
+	if runtime.GOOS == "windows" {
+		return menubar.StartWithArgs(ctx, exe, []string{"internal-tray"}, 5*time.Second)
+	}
+	path, err := menuHelper(exe)
+	if err != nil {
+		return nil, err
+	}
+	return menubar.Start(ctx, path, 5*time.Second)
 }

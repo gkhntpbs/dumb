@@ -15,6 +15,9 @@ import (
 
 func TestMain(m *testing.M) {
 	if mode := os.Getenv("QA_MENU_CHILD"); mode != "" {
+		if mode == "arguments" && (len(os.Args) != 2 || os.Args[1] != "internal-tray") {
+			os.Exit(2)
+		}
 		if mode == "silent" {
 			time.Sleep(time.Minute)
 			os.Exit(0)
@@ -119,4 +122,17 @@ func TestNativeHelperProtocol(t *testing.T) {
 	if output, err := exec.CommandContext(ctx, binary, "--self-test").CombinedOutput(); err != nil {
 		t.Fatalf("native protocol: %v: %s", err, output)
 	}
+}
+
+func TestSessionHelperArguments(t *testing.T) {
+	t.Setenv("QA_MENU_CHILD", "arguments")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := StartWithArgs(context.Background(), exe, []string{"internal-tray"}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Close()
 }

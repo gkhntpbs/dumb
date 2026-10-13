@@ -1,7 +1,7 @@
 # Ollama readiness and recovery
 
 `dumb-worker run` and `setup` share `internal/ollama/recovery.go`.
-On macOS, an implicit default endpoint may start a discovered, stopped Ollama
+On macOS and Windows, an implicit default endpoint may start a discovered, stopped Ollama
 CLI or install it when absent. A reachable API is reused; missing configured
 models are pulled without deleting other models or changing their settings.
 The worker verifies its server credential before any readiness repair, stops
@@ -14,7 +14,7 @@ generation failures also request an immediate readiness check.
 A non-empty `DUMB_OLLAMA` or an explicit `-ollama` flag is external, even when
 its value is the default `http://127.0.0.1:11434`. That provenance is preserved
 in generated service environments. An empty environment value selects the
-implicit default. Non-default endpoints and non-macOS systems are not
+implicit default. Non-default endpoints and systems other than macOS/Windows are not
 installed or started automatically by this readiness manager.
 
 A successful model-list observation or version probe of an API without an
@@ -39,8 +39,10 @@ arbitrary model or hardware failures.
 when it exits. An API already running remains untouched. Its next command is
 `dumb-worker run`, which owns a stopped CLI throughout its runtime and stops
 its own child on normal shutdown. No PID ownership is persisted and no unknown
-PID is signaled. If the worker is killed without cleanup, a still-running
-orphan API is conservatively external to the next worker. A managed bundle
+PID is signaled. On macOS, if the worker is killed without cleanup, a still-running
+orphan API is conservatively external to the next worker. Windows owned process
+trees instead use a noninherited kill-on-close Job Object, including model
+subprocesses; forced worker termination releases this handle. A managed bundle
 pathname alone is not proof of socket ownership; automatic orphan adoption
 and recovery are not implemented.
 
@@ -79,11 +81,13 @@ failed stages are removed. The verified retained bundle is not filesystem
 immutable and is not automatically deleted or replaced.
 
 These production safety limits are separate from the tiny test fixtures.
-No official installer, native Ollama process, model download or real clean-Mac
-installation was executed for this change. Native macOS startup, code-signing,
+No official macOS installer, native macOS Ollama process, model download or real
+clean-Mac installation was executed for the macOS recovery change. Native macOS startup, code-signing,
 OS notifications, child-process cleanup and focus behavior still need a real
-opt-in check on a suitable clean machine. Windows tray/service work remains
-deferred; the existing macOS BTM notification gap is still open.
+opt-in check on a suitable clean machine. Windows official portable installation, tiny-model jobs, owned crash/recovery,
+model-preserving reinstall, actual CLI setup/run, native SCM and signed worker
+updates are separately verified in `docs/qa/windows-worker-2026-10-12.md`.
+The macOS BTM notification gap remains open.
 
 Official layout references: [Ollama macOS documentation](https://github.com/ollama/ollama/blob/main/docs/macos.mdx)
 and [macOS build script](https://github.com/ollama/ollama/blob/main/scripts/build_darwin.sh).
@@ -130,3 +134,11 @@ cancellation and cleanup. Owned API/tag/generation failures recover through
 real DUMB queue jobs. Unauthenticated workers perform no repair. CLI tests
 cover explicit-default provenance, service preservation and setup ownership.
 Dated measurements and red-before-fix evidence are in `measurements.md`.
+
+Windows uses the official standalone CLI/dependency ZIP rather than the GUI
+installer. Owned data/identity/model directories, secure local archive overrides,
+Winsock refusal classification and native acceptance commands are documented in
+[Windows worker](windows-worker.md). Download/extraction bounds are shared with
+macOS; Windows additionally rejects ADS, reserved/trailing-alias names and
+case-insensitive duplicates, and publishes a new owned directory without
+replacing an existing target.

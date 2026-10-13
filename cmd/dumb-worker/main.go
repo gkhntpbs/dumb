@@ -42,7 +42,6 @@ import (
 	"time"
 
 	"github.com/gkhntpbs/dumb/internal/doctor"
-	"github.com/gkhntpbs/dumb/internal/menubar"
 	"github.com/gkhntpbs/dumb/internal/ollama"
 	"github.com/gkhntpbs/dumb/internal/protocol"
 	"github.com/gkhntpbs/dumb/internal/service"
@@ -75,7 +74,7 @@ func main() {
 		os.Exit(exitError)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	code := platformRun(ctx, os.Args[1:], os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
 }
@@ -88,7 +87,23 @@ type config struct {
 	system                               bool // service: Linux system unit
 	headless                             bool
 	ollamaConfigured                     bool
+	ollamaDataDir                        string
+	ollamaModelsDir                      string
 	newSystem                            func(*ollama.Client) *ollama.System
+}
+
+func (c *config) ollamaSystem(client *ollama.Client) *ollama.System {
+	system := ollama.NewSystem(client)
+	if c.newSystem != nil {
+		system = c.newSystem(client)
+	}
+	if system.WindowsDataDir == "" {
+		system.WindowsDataDir = c.ollamaDataDir
+	}
+	if os.Getenv("OLLAMA_MODELS") == "" {
+		system.WindowsModelsDir = c.ollamaModelsDir
+	}
+	return system
 }
 
 func (c *config) modelList() []string {
@@ -116,7 +131,7 @@ func parseFlags(name string, args []string, stderr io.Writer) (*config, []string
 	if err != nil {
 		return nil, nil, fmt.Errorf("DUMB_CAPACITY: %w", err)
 	}
-	fs.BoolVar(&c.headless, "headless", os.Getenv("DUMB_HEADLESS") == "1", "run without the macOS menu bar (env DUMB_HEADLESS=1)")
+	fs.BoolVar(&c.headless, "headless", os.Getenv("DUMB_HEADLESS") == "1", "run without the desktop status UI (env DUMB_HEADLESS=1)")
 	fs.StringVar(&c.server, "server", os.Getenv("DUMB_SERVER"), "server URL (env DUMB_SERVER)")
 	fs.StringVar(&c.tokenFile, "token-file", os.Getenv("DUMB_TOKEN_FILE"), "token file, mode 0600 (env DUMB_TOKEN_FILE)")
 	fs.StringVar(&c.models, "models", os.Getenv("DUMB_MODELS"), "comma-separated models (env DUMB_MODELS)")
@@ -197,10 +212,7 @@ func cmdRun(ctx context.Context, c *config, logger *log.Logger) int {
 		logger.Print(err)
 		return exitError
 	}
-	system := ollama.NewSystem(client)
-	if c.newSystem != nil {
-		system = c.newSystem(client)
-	}
+	system := c.ollamaSystem(client)
 	recovery, err := ollama.NewRecovery(ollama.RecoveryConfig{System: system, Models: c.modelList(), External: c.ollamaConfigured, Logger: logger})
 	if err != nil {
 		logger.Print(err)
@@ -229,6 +241,7 @@ func cmdRun(ctx context.Context, c *config, logger *log.Logger) int {
 		newWorker: func(onHello func()) (runner, error) {
 			cfg := wcfg
 			cfg.OnHello = onHello
+			cfg.OnStatus = desktopStatusObserver(wcfg.OnStatus, func() { platformReady(desktopRuntimeInfo{OllamaPID: system.OwnedPID(), OllamaURL: c.ollamaURL}) })
 			return worker.New(cfg)
 		},
 	}
@@ -260,14 +273,10 @@ func cmdRun(ctx context.Context, c *config, logger *log.Logger) int {
 		}
 		s.probation = p
 	}
-	if runtime.GOOS == "darwin" && !c.headless {
-		path, uerr := menuHelper(exe)
-		var session *menubar.Session
-		if uerr == nil {
-			session, uerr = menubar.Start(ctx, path, 5*time.Second)
-		}
+	if (runtime.GOOS == "darwin" || runtime.GOOS == "windows") && !c.headless {
+		session, uerr := startMenuSession(ctx, exe)
 		if uerr != nil {
-			logger.Printf("menu bar unavailable; no jobs will be claimed: %v", uerr)
+			logger.Printf("desktop status UI unavailable; no jobs will be claimed: %v", uerr)
 			if s.probation != nil && errors.Is(s.probation.Rollback(), update.ErrRestart) {
 				return exitRestart
 			}

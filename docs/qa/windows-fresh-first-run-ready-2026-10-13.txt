@@ -1,0 +1,16 @@
+PASS: same-user actual Windows Desktop resolved through Windows KnownFolder
+PASS: latest local development executable copied exclusively without launch
+PASS: Windows GUI subsystem is 2; self-contained native tray symbol present
+PASS: Desktop executable SHA256 matches latest development build
+SHA256: B0C726C4EAE56603D5FCFAC7DC411FB89DE78C571C77CDA5004077A073EEDE94
+PASS: exact owned desktop runtime gracefully stopped; owned Ollama process tree stopped
+PASS: previous own worker executable/config/token and matching startup value backed up privately
+PASS: only the exact matching owned HKCU startup value removed
+PASS: marked default owned Ollama installation, models and home moved to restricted reversible backup
+PASS: retained separate development Ollama installation and model data preserved
+PASS: default worker/Ollama/models/home directories absent; default API listener absent
+PASS: own fixture runtime absent; transient QA tasks absent; other tasks/services/VMs untouched
+PASS: fixture worker credential and version 0.1.0 accepted through existing workers/me HTTP 200
+PASS: nonsecret Desktop setup guide supplied with fixture URL, private token file path and manual clipboard command
+NOT RUN: user will open Desktop executable and perform fresh first-run setup
+LIMITATION: local development binary; no published or production-signed GitHub release exists

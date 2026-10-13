@@ -201,6 +201,9 @@ func TestServerURL(t *testing.T) {
 func TestTokenFile(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "token")
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX modes; Windows ACLs have a separate native test")
+	}
 	os.WriteFile(p, []byte("  secret-token\n"), 0o600)
 	if tok, err := ReadTokenFile(p); err != nil || tok != "secret-token" {
 		t.Fatalf("0600: %q %v", tok, err)

@@ -69,6 +69,9 @@ func TestVersion(t *testing.T) {
 // with exactly the same JSON field names, and vice versa.
 func TestTypesMatchSpec(t *testing.T) {
 	types := map[string]any{
+		"AdminApi": AdminApi{}, "AdminApiCounters": AdminApiCounters{}, "AdminApiRoute": AdminApiRoute{}, "AdminApiBucket": AdminApiBucket{},
+		"AdminSession": AdminSession{}, "AdminLogin": AdminLogin{},
+		"AdminSummary": AdminSummary{}, "AdminWorker": AdminWorker{}, "AdminJob": AdminJob{}, "AdminWorkers": AdminWorkers{}, "AdminQueue": AdminQueue{},
 		"Error": Error{}, "UpgradeError": UpgradeError{}, "HelloRequest": HelloRequest{},
 		"HelloResponse": HelloResponse{}, "WhoAmI": WhoAmI{}, "SubmitRequest": SubmitRequest{}, "Assignment": Assignment{},
 		"ResultRequest": ResultRequest{}, "AckRequest": AckRequest{}, "JobStatus": JobStatus{}, "Status": Status{},
@@ -82,9 +85,18 @@ func TestTypesMatchSpec(t *testing.T) {
 		}
 		var got []string
 		rt := reflect.TypeOf(v)
-		for i := range rt.NumField() {
-			got = append(got, strings.Split(rt.Field(i).Tag.Get("json"), ",")[0])
+		var fields func(reflect.Type)
+		fields = func(rt reflect.Type) {
+			for i := range rt.NumField() {
+				f := rt.Field(i)
+				if f.Anonymous {
+					fields(f.Type)
+				} else {
+					got = append(got, strings.Split(f.Tag.Get("json"), ",")[0])
+				}
+			}
 		}
+		fields(rt)
 		if strings.Join(got, ",") != strings.Join(props, ",") {
 			t.Errorf("%s: Go fields %v, spec properties %v", name, got, props)
 		}

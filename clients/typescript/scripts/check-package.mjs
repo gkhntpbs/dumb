@@ -18,7 +18,9 @@ try {
   run("npm", ["ci", "--offline", "--ignore-scripts", "--no-audit", "--no-fund"], standalone);
   run("npm", ["run", "build"], standalone);
   run("npm", ["run", "test:unit"], standalone);
-  const [packed] = JSON.parse(run("npm", ["pack", "--json", "--pack-destination", consumer], root));
+  // npm 11 prints an array, npm 12 an object keyed by package name.
+  const packOutput = JSON.parse(run("npm", ["pack", "--json", "--pack-destination", consumer], root));
+  const packed = Array.isArray(packOutput) ? packOutput[0] : Object.values(packOutput)[0];
   const allowed = ["package.json", "README.md", "LICENSE"];
   assert.ok(packed.files.every(file => file.path.startsWith("dist/") || allowed.includes(file.path)));
   const metadata = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
