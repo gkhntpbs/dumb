@@ -1,0 +1,125 @@
+{
+  "source": "docs/brand/dumb-bear-mascot-sit.png",
+  "derived_with": "Pillow RGBA LANCZOS resize; multi-size PNG-in-ICO; iconutil ICNS",
+  "icons": [
+    {
+      "path": "docs/brand/dumb-bear-icon-128.png",
+      "size": [
+        128,
+        128
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "corner_alpha": 0,
+      "sha256": "aafc7a78b68565e0429c1f8adab9bc7ae14a022799436fee7a70e7f9fd323b3e"
+    },
+    {
+      "path": "docs/brand/dumb-bear-icon-16.png",
+      "size": [
+        16,
+        16
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "corner_alpha": 0,
+      "sha256": "3d5b10e456582a4220c8b3312e835e7e305ee002dd5efae509e95b364a875194"
+    },
+    {
+      "path": "docs/brand/dumb-bear-icon-160.png",
+      "size": [
+        160,
+        160
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "corner_alpha": 0,
+      "sha256": "91ea92dd55206cb443e379d49449cd73889db4aaee8fc0fcc925811584c05f4b"
+    },
+    {
+      "path": "docs/brand/dumb-bear-icon-256.png",
+      "size": [
+        256,
+        256
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "corner_alpha": 0,
+      "sha256": "0d1ab5f683c5e681e132c4727373edaca25225c7b43dc34d18bd628314fcc749"
+    },
+    {
+      "path": "docs/brand/dumb-bear-icon-32.png",
+      "size": [
+        32,
+        32
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "corner_alpha": 0,
+      "sha256": "9204fde17e94ab5ff56b823730f39566a339a25ec98bf7b16165a455f43815f3"
+    },
+    {
+      "path": "docs/brand/dumb-bear-icon-512.png",
+      "size": [
+        512,
+        512
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "corner_alpha": 0,
+      "sha256": "40d6f73e8299f1eea83c6a9ae96de509a352146b5248b889a7858de61b61e8ba"
+    },
+    {
+      "path": "docs/brand/dumb-bear-icon-64.png",
+      "size": [
+        64,
+        64
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "corner_alpha": 0,
+      "sha256": "f3a54ebd5d09571ab0165c0e8fc5b60fbd8e201fb6f6b947dadcc3de72d0ba56"
+    },
+    {
+      "path": "internal/branding/assets/apple-touch-icon.png",
+      "size": [
+        180,
+        180
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "corner_alpha": 0,
+      "sha256": "e4c8179a1424586e5b5b04dfd19e30b87cb62336bd4d15732228318085214f84"
+    },
+    {
+      "path": "internal/branding/assets/icon-128.png",
+      "size": [
+        128,
+        128
+      ],
+      "alpha_range": [
+        0,
+        255
+      ],
+      "corner_alpha": 0,
+      "sha256": "aafc7a78b68565e0429c1f8adab9bc7ae14a022799436fee7a70e7f9fd323b3e"
+    }
+  ],
+  "regeneration_command": "uv run --no-project --with pillow==12.0.0 bash scripts/brand-assets.sh <source-dir>",
+  "regeneration_verified": "Two pinned Pillow 12.0.0 regenerations; second has zero file checksum changes. All icon pixels match inherited transparent PNGs; compressed bytes normalized to pinned tooling."
+}
