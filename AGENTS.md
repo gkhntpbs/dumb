@@ -58,8 +58,9 @@ in the private `ops` repository, never here.
   Ollama listens on `127.0.0.1` only.
 - **Go, standard library first.** A third-party dependency in the server needs a written reason.
   Worker-only dependencies are `golang.org/x/crypto/blake2b` for minisign and
-  `golang.org/x/sys/windows` for native SCM and token ACL handling. The workspace
-  Windows ADR records this decision; `TestServerHasNoThirdPartyDeps` keeps
+  `golang.org/x/sys/windows` for native SCM and token ACL handling, plus
+  `golang.org/x/sys/unix` for hidden-input termios in the explicit pairing CLI.
+  The workspace Windows ADR and ADR-0015 record these decisions; `TestServerHasNoThirdPartyDeps` keeps
   third-party packages out of the server.
 - **Worker updates are signed, atomic and reversible.** A binary whose signature does not
   verify is never applied.

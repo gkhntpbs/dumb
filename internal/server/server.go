@@ -33,6 +33,9 @@ type Config struct {
 	QueueLimits         queue.Limits
 	QueueStateDirectory string
 	QueueStateMaxBytes  int64
+	Credentials         CredentialProvider   // optional private registry
+	AdminOrigin         string               // exact browser management origin
+	PairingRate         Rate                 // separate attempt limit; default DefaultUnauthRate
 	AdminSessions       AdminSessionProvider // optional browser authentication; implementation belongs to the embedding application
 	Auth                auth.Authenticator
 	MinWorkerVersion    string           // e.g. "0.1.0"
@@ -76,6 +79,7 @@ type Server struct {
 	log     *slog.Logger
 
 	workerLim, callerLim, unauthLim *limiter
+	pairingLim                      *limiter
 
 	// afterClaim, if set, runs after a job is claimed and before the
 	// assignment is written (a test seam for the aborted long-poll race).
@@ -85,6 +89,9 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if cfg.Auth == nil {
 		return nil, errors.New("server: Auth is required")
+	}
+	if cfg.Credentials != nil && !validAdminOrigin(cfg.AdminOrigin) {
+		return nil, errors.New("server: valid exact AdminOrigin required for credentials")
 	}
 	min, err := protocol.ParseReleaseVersion(cfg.MinWorkerVersion)
 	if err != nil {
@@ -113,11 +120,13 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{epoch: cfg.Now().UTC(), cfg: cfg, min: min, q: q, mux: http.NewServeMux(), workers: map[string]*worker{}, log: cfg.Logger,
-		workerLim: newLimiter(cfg.WorkerRate, time.Now),
-		callerLim: newLimiter(cfg.CallerRate, time.Now),
-		unauthLim: newLimiter(cfg.UnauthRate, time.Now),
+		workerLim:  newLimiter(cfg.WorkerRate, time.Now),
+		callerLim:  newLimiter(cfg.CallerRate, time.Now),
+		unauthLim:  newLimiter(cfg.UnauthRate, time.Now),
+		pairingLim: newLimiter(cfg.PairingRate.orDefault(DefaultUnauthRate), time.Now),
 	}
 
+	s.pairingLim.maxKeys = 4096
 	s.q.OnExpire = func(jobID, model, workerID string) {
 		if workerID == "" {
 			s.log.Warn("job expired", "job_id", jobID, "model", model, "was", protocol.StateQueued)
@@ -125,6 +134,7 @@ func New(cfg Config) (*Server, error) {
 			s.log.Warn("job expired", "job_id", jobID, "model", model, "was", protocol.StateLeased, "worker", workerID)
 		}
 	}
+	s.mux.HandleFunc("POST /v1/workers/pair", s.pair)
 	s.mux.HandleFunc("POST /v1/workers/hello", s.asWorker(s.hello))
 	s.mux.HandleFunc("POST /v1/workers/goodbye", s.asWorker(s.goodbye))
 	s.mux.HandleFunc("GET /v1/workers/me", s.asWorker(s.whoami))
@@ -381,6 +391,19 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal)
 		s.afterClaim(r)
 	}
 	l := s.reqLog(r)
+	// Revalidate the original secret after a parked poll obtains a lease. Rotation
+	// preserves identity but invalidates the original secret immediately.
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	current, authErr := s.cfg.Auth.Authenticate(token)
+	if authErr != nil || current.Role != auth.RoleWorker || current.ID != p.ID {
+		released := s.q.Release(a.JobID, a.LeaseID)
+		if !released && s.q.StorageError() != nil {
+			writeError(w, 503, "queue storage unavailable")
+			return
+		}
+		writeError(w, 401, "unauthorized")
+		return
+	}
 	// The poll may have been aborted in the instant the job was claimed. Then
 	// nobody would run it until its deadline: put it back at the front.
 	if r.Context().Err() == nil {

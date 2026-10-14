@@ -69,6 +69,7 @@ func TestVersion(t *testing.T) {
 // with exactly the same JSON field names, and vice versa.
 func TestTypesMatchSpec(t *testing.T) {
 	types := map[string]any{
+		"Credential": Credential{}, "CredentialPage": CredentialPage{}, "IssueCredentialRequest": IssueCredentialRequest{}, "RotateCredentialRequest": RotateCredentialRequest{}, "IssuedCredential": IssuedCredential{}, "CreatePairingRequest": CreatePairingRequest{}, "PairingCode": PairingCode{}, "PairRequest": PairRequest{},
 		"AdminApi": AdminApi{}, "AdminApiCounters": AdminApiCounters{}, "AdminApiRoute": AdminApiRoute{}, "AdminApiBucket": AdminApiBucket{},
 		"AdminSession": AdminSession{}, "AdminLogin": AdminLogin{},
 		"AdminSummary": AdminSummary{}, "AdminWorker": AdminWorker{}, "AdminJob": AdminJob{}, "AdminWorkers": AdminWorkers{}, "AdminQueue": AdminQueue{},

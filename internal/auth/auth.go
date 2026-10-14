@@ -13,13 +13,14 @@ import (
 	"time"
 )
 
-// Role separates the two audiences of the server.
+// Role separates protocol and administrative audiences of the server.
 type Role string
 
 const (
-	RoleWorker    Role = "worker"
-	RoleCaller    Role = "caller"
-	RoleAdminRead Role = "admin-read"
+	RoleWorker      Role = "worker"
+	RoleCaller      Role = "caller"
+	RoleAdminRead   Role = "admin-read"
+	RoleAdminManage Role = "admin-manage"
 )
 
 // Principal is an authenticated identity.

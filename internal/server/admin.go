@@ -72,13 +72,14 @@ func (s *Server) AdminHandler() http.Handler {
 	branding.Register(mux)
 	lim := newLimiter(DefaultCallerRate, time.Now)
 	denied := newLimiter(DefaultUnauthRate, time.Now)
+	s.registerCredentials(mux, lim)
 	mux.HandleFunc("/admin/v1/session", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeError(w, 405, "method not allowed")
 			return
 		}
 		p, err := s.adminPrincipal(r)
-		writeJSON(w, 200, protocol.AdminSession{Authenticated: err == nil && p.Role == auth.RoleAdminRead})
+		writeJSON(w, 200, protocol.AdminSession{Authenticated: err == nil && (p.Role == auth.RoleAdminRead || p.Role == auth.RoleAdminManage)})
 	})
 	mux.HandleFunc("/admin/v1/login", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -139,7 +140,7 @@ func (s *Server) AdminHandler() http.Handler {
 				return
 			}
 			p, err := s.adminPrincipal(r)
-			if err != nil || p.Role != auth.RoleAdminRead {
+			if err != nil || (p.Role != auth.RoleAdminRead && p.Role != auth.RoleAdminManage) {
 				denied.allow(ip)
 				s.log.Warn("admin access denied")
 				writeError(w, 401, "unauthorized")
@@ -211,6 +212,10 @@ func (s *Server) AdminHandler() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
+		if managedCredentialPath(r.URL.Path) && (r.Header.Get("Origin") != s.cfg.AdminOrigin || s.cfg.AdminOrigin == "" || r.Header.Get("Sec-Fetch-Site") == "cross-site") {
+			writeError(w, 403, "cross-origin request denied")
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/admin/v1/") && !adminSameOrigin(r, (r.URL.Path == "/admin/v1/login" || r.URL.Path == "/admin/v1/logout") && r.Method == http.MethodPost) {
 			writeError(w, 403, "cross-origin request denied")
 			return

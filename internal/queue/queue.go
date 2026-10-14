@@ -513,3 +513,12 @@ func minTime(a, b time.Time) time.Time {
 	}
 	return b
 }
+
+// StorageError reports whether further mutations must fail closed. Callers use
+// it to distinguish a lease already expired from an undelivered release whose
+// durable write failed; it never exposes paths or underlying IO details.
+func (q *Queue) StorageError() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.storageErrorLocked()
+}

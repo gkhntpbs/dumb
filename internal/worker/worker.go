@@ -118,6 +118,16 @@ func ReadTokenFile(path string) (string, error) {
 	return tok, nil
 }
 
+// CheckCredentialPathPermissions verifies the platform access policy without reading
+// secret content. Pairing uses this for its parent directory before staging a token.
+func CheckCredentialPathPermissions(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	return checkTokenPermissions(path, info)
+}
+
 type Worker struct {
 	cfg     Config
 	base    *url.URL

@@ -42,11 +42,12 @@ type bucket struct {
 
 // limiter keeps one in-memory token bucket per key.
 type limiter struct {
-	rate  Rate
-	now   func() time.Time
-	mu    sync.Mutex
-	b     map[string]*bucket
-	swept time.Time
+	rate    Rate
+	now     func() time.Time
+	mu      sync.Mutex
+	b       map[string]*bucket
+	swept   time.Time
+	maxKeys int // optional cap; used for unauthenticated pairing attempts only
 }
 
 func newLimiter(r Rate, now func() time.Time) *limiter {
@@ -93,6 +94,9 @@ func (l *limiter) allow(key string) (bool, time.Duration) {
 	defer l.mu.Unlock()
 	now := l.now()
 	l.sweepLocked(now)
+	if l.maxKeys > 0 && l.b[key] == nil && len(l.b) >= l.maxKeys {
+		return false, time.Second
+	}
 	b := l.refillLocked(key, now)
 	if b.tokens >= 1 {
 		b.tokens--

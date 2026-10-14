@@ -61,12 +61,163 @@ security:
   - bearer: []
 tags:
   - name: admin
-    description: Read-only metadata endpoints requiring the separate admin-read role.
+    description: Private admin metadata and optional cookie-only admin-manage credential operations.
   - name: worker
     description: Endpoints a worker calls (outbound only).
   - name: caller
     description: Endpoints an app calls to get AI work done.
 paths:
+  /v1/workers/pair:
+    post:
+      tags: [worker]
+      operationId: pairWorker
+      summary: Exchange a one-time pairing code for a worker credential.
+      description: >
+        Optional provider feature. No bearer authentication. Requires JSON and the
+        worker version floor. Code and credential are 32 random bytes encoded as
+        43-character base64url strings. Exchange consumes the code durably and
+        retires previous credentials for the paired worker only on success.
+        Secret responses are never cached. Do not automatically retry: a lost
+        successful response requires a new pairing code.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/WorkerVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PairRequest" }
+      responses:
+        "200":
+          description: One-time plaintext worker credential.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IssuedCredential" }
+        "400": { description: "Invalid JSON, code format or version." }
+        "401": { description: "Invalid, expired or consumed pairing code." }
+        "415": { description: JSON required. }
+        "426": { $ref: "#/components/responses/UpgradeRequired" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { description: Pairing unavailable. }
+  /admin/v1/credentials:
+    get:
+      tags: [admin]
+      operationId: adminCredentials
+      summary: List current credential metadata without secrets or hashes.
+      description: Cookie-only admin-manage; exact configured Origin required, including GET. No bearer fallback. Pagination is offset/limit, not a stable snapshot.
+      security: [{ adminCookie: [] }]
+      parameters:
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, maximum: 10000, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        "200":
+          description: Current inventory; never cached; not an audit history.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CredentialPage" }
+        "400": { description: Invalid pagination. }
+        "401": { description: Cookie session lacks admin-manage. }
+        "403": { description: Origin denied. }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { description: Management unavailable. }
+    post:
+      tags: [admin]
+      operationId: adminIssueCredential
+      summary: Issue a caller or worker credential.
+      description: Cookie-only admin-manage, exact configured Origin and JSON required. No administrative credentials can be issued. Plaintext is returned once and never cached.
+      security: [{ adminCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IssueCredentialRequest" }
+      responses:
+        "201":
+          description: One-time plaintext credential.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IssuedCredential" }
+        "400": { description: Invalid role or required TTL. }
+        "401": { description: Cookie session lacks admin-manage. }
+        "403": { description: Origin denied. }
+        "415": { description: JSON required. }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { description: Management unavailable or capacity exhausted. }
+  /admin/v1/credentials/{id}/rotate:
+    post:
+      tags: [admin]
+      operationId: adminRotateCredential
+      summary: Atomically replace a credential, preserving principal identity and role.
+      description: Cookie-only admin-manage, exact configured Origin and JSON required. The previous credential is immediately retired. Plaintext replacement is returned once.
+      security: [{ adminCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]{1,128}$" } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RotateCredentialRequest" }
+      responses:
+        "200":
+          description: One-time plaintext replacement; never cached.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IssuedCredential" }
+        "400": { description: Invalid TTL or credential ID. }
+        "401": { description: Cookie session lacks admin-manage. }
+        "403": { description: Origin denied. }
+        "404": { description: Credential not found. }
+        "415": { description: JSON required. }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { description: Management unavailable or capacity exhausted. }
+  /admin/v1/credentials/{id}/revoke:
+    post:
+      tags: [admin]
+      operationId: adminRevokeCredential
+      summary: Revoke a credential immediately and durably.
+      description: Cookie-only admin-manage, exact configured Origin and JSON empty object required. Repeated revoke of a retained credential succeeds. Already accepted leases are not silently cancelled.
+      security: [{ adminCookie: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]{1,128}$" } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "204": { description: Credential revoked; never cached. }
+        "400": { description: Invalid request. }
+        "401": { description: Cookie session lacks admin-manage. }
+        "403": { description: Origin denied. }
+        "404": { description: Credential not found. }
+        "415": { description: JSON required. }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { description: Management unavailable. }
+  /admin/v1/pairing:
+    post:
+      tags: [admin]
+      operationId: adminCreatePairing
+      summary: Create a one-time worker pairing code.
+      description: Cookie-only admin-manage, exact configured Origin and JSON required. Optional worker_id preserves an existing worker principal; caller identities cannot be paired. Creation does not retire existing credentials. Plaintext code is returned once and never cached.
+      security: [{ adminCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePairingRequest" }
+      responses:
+        "201":
+          description: One-time plaintext pairing code.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PairingCode" }
+        "400": { description: Invalid worker ID or required TTLs. }
+        "401": { description: Cookie session lacks admin-manage. }
+        "403": { description: Origin denied. }
+        "404": { description: Existing worker not found. }
+        "415": { description: JSON required. }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { description: Management unavailable or capacity exhausted. }
   /admin/v1/session:
     get:
       tags: [admin]
@@ -526,7 +677,7 @@ components:
       type: apiKey
       in: cookie
       name: dumb_admin_session
-      description: Opaque admin browser session; only accepted when a provider is configured.
+      description: Opaque admin browser session; only accepted when a provider is configured. Management requires the explicit admin-manage role and exact Origin.
     bearer:
       type: http
       scheme: bearer
@@ -619,6 +770,68 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/UpgradeError" }
   schemas:
+    Credential:
+      type: object
+      additionalProperties: false
+      required: [credential_id, principal_id, role, created_at, expires_at, revoked]
+      properties:
+        credential_id: { type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]{1,128}$" }
+        principal_id: { type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]{1,128}$" }
+        role: { type: string, enum: [caller, worker] }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, description: Imported legacy non-expiring credentials use the zero timestamp. }
+        revoked: { type: boolean }
+    CredentialPage:
+      type: object
+      additionalProperties: false
+      required: [total, offset, limit, items]
+      properties:
+        total: { type: integer, minimum: 0 }
+        offset: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        items: { type: array, items: { $ref: "#/components/schemas/Credential" } }
+    IssueCredentialRequest:
+      type: object
+      additionalProperties: false
+      required: [role, ttl_seconds]
+      properties:
+        role: { type: string, enum: [caller, worker] }
+        ttl_seconds: { type: integer, minimum: 1, maximum: 31622400 }
+    RotateCredentialRequest:
+      type: object
+      additionalProperties: false
+      required: [ttl_seconds]
+      properties:
+        ttl_seconds: { type: integer, minimum: 1, maximum: 31622400 }
+    IssuedCredential:
+      type: object
+      additionalProperties: false
+      required: [credential, token]
+      properties:
+        credential: { $ref: "#/components/schemas/Credential" }
+        token: { type: string, minLength: 43, maxLength: 43, pattern: "^[A-Za-z0-9_-]{43}$" }
+    CreatePairingRequest:
+      type: object
+      additionalProperties: false
+      required: [ttl_seconds, credential_ttl_seconds]
+      properties:
+        worker_id: { type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]{1,128}$" }
+        ttl_seconds: { type: integer, minimum: 1, maximum: 600 }
+        credential_ttl_seconds: { type: integer, minimum: 1, maximum: 31622400 }
+    PairingCode:
+      type: object
+      additionalProperties: false
+      required: [code, expires_at, worker_id]
+      properties:
+        code: { type: string, minLength: 43, maxLength: 43, pattern: "^[A-Za-z0-9_-]{43}$" }
+        expires_at: { type: string, format: date-time }
+        worker_id: { type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]{1,128}$" }
+    PairRequest:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code: { type: string, minLength: 43, maxLength: 43, pattern: "^[A-Za-z0-9_-]{43}$" }
     AdminSession:
       type: object
       additionalProperties: false

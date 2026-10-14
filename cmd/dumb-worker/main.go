@@ -178,6 +178,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "dumb-worker %s (protocol v%d)\n", version, protocol.Version)
 		return exitOK
 	}
+	if cmd == "pair" {
+		c, err := parsePairFlags(args)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitUsage
+		}
+		return cmdPair(ctx, c, stdout, stderr)
+	}
 	c, rest, err := parseFlags(cmd, args, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -200,7 +208,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "service":
 		return cmdService(ctx, c, sub, stdout, logger)
 	}
-	fmt.Fprintf(stderr, "dumb-worker: unknown command %q (run, doctor, setup, service, version)\n", cmd)
+	fmt.Fprintf(stderr, "dumb-worker: unknown command %q (run, doctor, setup, pair, service, version)\n", cmd)
 	return exitUsage
 }
 
