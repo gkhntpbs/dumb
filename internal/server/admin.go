@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"github.com/gkhntpbs/dumb/internal/branding"
 	"io"
 	"io/fs"
 	"mime"
@@ -68,6 +69,7 @@ func (s *Server) AdminHandler() http.Handler {
 	mux.Handle("GET /admin.css", assets)
 	mux.Handle("GET /admin-contract.js", assets)
 	mux.Handle("GET /chart.umd.js", assets)
+	branding.Register(mux)
 	lim := newLimiter(DefaultCallerRate, time.Now)
 	denied := newLimiter(DefaultUnauthRate, time.Now)
 	mux.HandleFunc("/admin/v1/session", func(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +207,7 @@ func (s *Server) AdminHandler() http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")

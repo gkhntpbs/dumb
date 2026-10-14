@@ -1,3 +1,37 @@
+<p align="center">
+  <img src="docs/brand/dumb-bear-icon-160.png" width="160" height="160" alt="The DUMB bear, a sleepy brown bear">
+</p>
+
+```text
+     .-"""-.                         .-"""-.
+    /  .-.  \   _.-----------._   /  .-.  \
+   |  (   )  |-'`               `'-|  (   )  |
+    \  '-'  /                       \  '-'  /
+     '-._.-'                         '-._.-'
+      /                                   \
+     /                                     \
+    |                                       |
+    |     '-.___.-'           '-.___.-'     |
+    |              .-"""""""-.              |
+    |            .'   _____   '.            |
+    |           /    (     )    \           |
+    |          |      '-.-'      |          |
+     \         |        |        |         /
+      \         \     \___/     /         /
+       '.        '.           .'        .'
+         '-.       '-._____.-'       .-'
+            '-._                 _.-'
+                '--._________.--'
+
+           ____    _   _   __  __   ____
+          |  _ \  | | | | |  \/  | | __ )
+          | | | | | | | | | |\/| | |  _ \
+          | |_| | | |_| | | |  | | | |_) |
+          |____/   \___/  |_|  |_| |____/
+
+       Distributed User-owned Model Backend
+```
+
 # DUMB — Distributed User-owned Model Backend
 
 Run AI requests on machines you own, wherever they are, and fall back to the cloud when

@@ -96,7 +96,7 @@ func icon(hwnd uintptr, operation uintptr) bool {
 	mu.Lock()
 	current := status
 	mu.Unlock()
-	image, _, _ := loadicon.Call(0, 32512)
+	image := trayIcon()
 	n := notifyicon{Hwnd: hwnd, ID: 1, Flags: 1 | 2 | 4, Callback: trayMessage, Icon: image}
 	n.Size = uint32(unsafe.Sizeof(n))
 	text := windows.StringToUTF16(fmt.Sprintf("DUMB: %s | %d active | %s", current.State, current.Active, current.Category))

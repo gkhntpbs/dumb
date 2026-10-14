@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/gkhntpbs/dumb/internal/branding"
 	"io"
 	"log/slog"
 	"net/http"
@@ -126,6 +127,7 @@ func New(cfg Config) (*Server, error) {
 	s.mux.HandleFunc("POST /v1/jobs", s.asCaller(s.submit))
 	s.mux.HandleFunc("GET /v1/jobs/{id}", s.asCaller(s.getJob))
 	s.mux.HandleFunc("GET /v1/status", s.asCaller(s.status))
+	branding.Register(s.mux)
 	return s, nil
 }
 

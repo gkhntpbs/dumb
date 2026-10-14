@@ -144,3 +144,23 @@ func TestAdminLifecycleSanitization(t *testing.T) {
 		t.Fatal("epoch")
 	}
 }
+
+func TestAdminServesBearIcons(t *testing.T) {
+	s, err := New(Config{Auth: auth.NewStaticTokens(), MinWorkerVersion: "0.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.AdminHandler()
+	for path, ct := range map[string]string{"/favicon.ico": "image/x-icon", "/icon.png": "image/png"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if w.Code != 200 || w.Header().Get("Content-Type") != ct {
+			t.Fatalf("%s: %d %q", path, w.Code, w.Header().Get("Content-Type"))
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "img-src 'self'") || !strings.Contains(w.Body.String(), `rel="icon"`) {
+		t.Fatal("admin page cannot show its icon")
+	}
+}

@@ -28,6 +28,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/gkhntpbs/dumb/internal/branding"
 	"io"
 	"log"
 	"net"
@@ -172,6 +173,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		sub, args = args[0], args[1:]
 	}
 	if cmd == "version" {
+		fmt.Fprint(stdout, branding.LogoCompact)
 		fmt.Fprintf(stdout, "dumb-worker %s (protocol v%d)\n", version, protocol.Version)
 		return exitOK
 	}

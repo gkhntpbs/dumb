@@ -41,8 +41,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.setActivationPolicy(.accessory)
         let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item = status
-        status.button?.image = NSImage(systemSymbolName: "circle.dotted", accessibilityDescription: "DUMB Worker")
-        status.button?.image?.isTemplate = true
+        status.button?.image = icon(for: "starting")
         status.button?.toolTip = "DUMB Worker"
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -91,18 +90,26 @@ final class MenuDelegate: NSObject, NSApplicationDelegate {
         activeItem.title = "Active jobs: \(update.active)"
         controlItem.title = paused ? "Resume" : "Pause"
         controlItem.isEnabled = !["draining", "updating", "stopping", "error"].contains(update.state)
-        let symbol: String
-        switch update.state {
-        case "ready": symbol = "circle"
-        case "serving": symbol = "circle.fill"
-        case "paused", "draining": symbol = "pause.circle"
-        case "error": symbol = "exclamationmark.circle"
-        case "stopping": symbol = "stop.circle"
-        default: symbol = "arrow.triangle.2.circlepath"
-        }
-        item?.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "DUMB Worker \(update.state)")
-        item?.button?.image?.isTemplate = true
+        item?.button?.image = icon(for: update.state)
+        item?.button?.appearsDisabled = ["paused", "draining", "stopping"].contains(update.state)
         diagnostics(update)
+    }
+
+    private func icon(for state: String) -> NSImage? {
+        // The bear is a template image so it follows the light/dark menu bar;
+        // errors keep a distinct symbol, and missing resources fall back to symbols.
+        let description = "DUMB Worker \(state)"
+        var image: NSImage?
+        if state != "error", let bear = Bundle.main.image(forResource: "menubar") {
+            bear.size = NSSize(width: 18, height: 18)
+            bear.accessibilityDescription = description
+            image = bear
+        } else {
+            let symbol = state == "error" ? "exclamationmark.circle" : "circle.dotted"
+            image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
+        }
+        image?.isTemplate = true
+        return image
     }
 
     private func diagnostics(_ update: WorkerStatus) {
