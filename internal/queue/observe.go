@@ -43,8 +43,10 @@ func (q *Queue) recordLocked(j *job, now time.Time) {
 }
 
 func (q *Queue) Observe(model, state string, offset, limit int) Observation {
+	defer q.flushExpirations()
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.cleanupLocked()
 	now := q.now().UTC()
 	o := Observation{At: now, Done: q.completed, Failed: q.failed, Expired: q.expired, Leases: map[string]int{}, Jobs: []protocol.AdminJob{}}
 	h := &jobHeap{}

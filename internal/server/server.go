@@ -30,6 +30,7 @@ const MaxBodyBytes = 1 << 20
 const DefaultAckWindow = 2 * time.Second
 
 type Config struct {
+	QueueLimits      queue.Limits
 	AdminSessions    AdminSessionProvider // optional browser authentication; implementation belongs to the embedding application
 	Auth             auth.Authenticator
 	MinWorkerVersion string           // e.g. "0.1.0"
@@ -105,7 +106,11 @@ func New(cfg Config) (*Server, error) {
 	cfg.WorkerRate = cfg.WorkerRate.orDefault(DefaultWorkerRate)
 	cfg.CallerRate = cfg.CallerRate.orDefault(DefaultCallerRate)
 	cfg.UnauthRate = cfg.UnauthRate.orDefault(DefaultUnauthRate)
-	s := &Server{epoch: cfg.Now().UTC(), cfg: cfg, min: min, q: queue.New(), mux: http.NewServeMux(), workers: map[string]*worker{}, log: cfg.Logger,
+	q, err := queue.NewWithLimits(cfg.QueueLimits)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{epoch: cfg.Now().UTC(), cfg: cfg, min: min, q: q, mux: http.NewServeMux(), workers: map[string]*worker{}, log: cfg.Logger,
 		workerLim: newLimiter(cfg.WorkerRate, time.Now),
 		callerLim: newLimiter(cfg.CallerRate, time.Now),
 		unauthLim: newLimiter(cfg.UnauthRate, time.Now),
@@ -209,7 +214,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, role auth.
 	}
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	p, err := s.cfg.Auth.Authenticate(token)
-	if !ok || err != nil || p.Role != role {
+	if !ok || err != nil || p.Role != role || p.ID == "" {
 		s.unauthLim.allow(ip)
 		s.reqLog(r).Warn("unauthorized", "path", r.URL.Path, "client_ip", ip, "role", string(role))
 		writeJSON(w, http.StatusUnauthorized, protocol.Error{Error: "unauthorized"})
@@ -434,7 +439,11 @@ func (s *Server) result(w http.ResponseWriter, r *http.Request, p auth.Principal
 	id := r.PathValue("id")
 	if err := s.q.Complete(id, req.LeaseID, p.ID, req.Output, req.Error); err != nil {
 		s.reqLog(r).Info("result refused", "job_id", id, "worker", p.ID, "err", err)
-		writeError(w, http.StatusConflict, err.Error())
+		code := http.StatusConflict
+		if errors.Is(err, queue.ErrResultTooLarge) {
+			code = http.StatusBadRequest
+		}
+		writeError(w, code, err.Error())
 		return
 	}
 	state := protocol.StateDone
@@ -477,22 +486,31 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request, p auth.Principal
 	if req.NumPredict == 0 {
 		req.NumPredict = protocol.MaxNumPredict
 	}
-	id := s.q.Submit(req)
+	id, err := s.q.Submit(p.ID, req)
+	if err != nil {
+		code := http.StatusServiceUnavailable
+		if errors.Is(err, queue.ErrCallerCapacity) {
+			code = http.StatusTooManyRequests
+		}
+		w.Header().Set("Retry-After", "1")
+		writeError(w, code, err.Error())
+		return
+	}
 	s.reqLog(r).Info("job submitted", "job_id", id, "caller", p.ID, "model", req.Model,
 		"prompt_bytes", len(req.Prompt), "system_bytes", len(req.System), "deadline_ms", req.DeadlineMS)
-	s.waitAndWrite(w, r, id, wait)
+	s.waitAndWrite(w, r, p.ID, id, wait)
 }
 
-func (s *Server) getJob(w http.ResponseWriter, r *http.Request, _ auth.Principal) {
+func (s *Server) getJob(w http.ResponseWriter, r *http.Request, p auth.Principal) {
 	wait, ok := parseWait(w, r, 0)
 	if !ok {
 		return
 	}
-	s.waitAndWrite(w, r, r.PathValue("id"), wait)
+	s.waitAndWrite(w, r, p.ID, r.PathValue("id"), wait)
 }
 
-func (s *Server) waitAndWrite(w http.ResponseWriter, r *http.Request, id string, wait time.Duration) {
-	deadline, err := s.q.Deadline(id)
+func (s *Server) waitAndWrite(w http.ResponseWriter, r *http.Request, owner, id string, wait time.Duration) {
+	deadline, err := s.q.Deadline(owner, id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -502,7 +520,7 @@ func (s *Server) waitAndWrite(w http.ResponseWriter, r *http.Request, id string,
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), wait)
 	defer cancel()
-	st, err := s.q.Wait(ctx, id)
+	st, err := s.q.Wait(ctx, owner, id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return

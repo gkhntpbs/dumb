@@ -357,6 +357,9 @@ paths:
       tags: [worker]
       operationId: submitResult
       summary: Post the result of a leased job.
+      description: >
+        The combined UTF-8 output and error payload may not exceed 1048576
+        bytes. Larger results receive 400 without completing the lease.
       parameters:
         - $ref: "#/components/parameters/WorkerVersion"
         - $ref: "#/components/parameters/RequestID"
@@ -383,6 +386,19 @@ paths:
       tags: [caller]
       operationId: submitJob
       summary: Submit a job, optionally waiting for its result.
+      description: >
+        The authenticated caller principal owns the job. Ownership is never
+        supplied by the request; only that principal can read the job status
+        or result, including while queued, leased or retained after finishing.
+        Admission atomically reserves an active slot, a retained-job slot and
+        UTF-8 request/owner bytes plus 1048576 bytes for the eventual result.
+        Global or per-caller limits reject admission without creating a job.
+        Per-caller saturation returns 429; global saturation returns 503.
+        Per-caller limits are checked first when both limits are exhausted.
+        These capacity responses include Retry-After: 1, a retry suggestion
+        rather than a guarantee. Finished jobs remain readable for one minute;
+        active reservations are released on completion or deadline expiry, and
+        retained result bytes and slots are released when retention ends.
       parameters:
         - $ref: "#/components/parameters/RequestID"
         - name: wait
@@ -416,7 +432,11 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/JobStatus" }
         "503":
-          description: No online worker serves this model. Take the fallback path now.
+          description: No online worker serves this model, or global queue capacity is exhausted. Take the fallback path now.
+          headers:
+            Retry-After:
+              description: Present as 1 when global queue capacity is exhausted.
+              schema: { type: integer, minimum: 1 }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -425,6 +445,10 @@ paths:
       tags: [caller]
       operationId: getJob
       summary: Wait for a job's result.
+      description: >
+        Only the authenticated caller principal that submitted the job can read
+        it. Unknown jobs, jobs owned by another caller and jobs whose retention
+        has ended receive the same 404 response before any waiting begins.
       parameters:
         - $ref: "#/components/parameters/RequestID"
         - $ref: "#/components/parameters/JobID"
@@ -447,7 +471,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
         "404":
-          description: Unknown job.
+          description: Unknown job, another caller owns it, or retention has ended.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -542,7 +566,9 @@ components:
     TooManyRequests:
       description: >
         A rate limit was exceeded: this principal's, or this client IP's after
-        failed authentications. Retry after `Retry-After` seconds.
+        failed authentications; caller job admission also uses this response
+        when a caller queue limit is exhausted. Retry after `Retry-After`
+        seconds; queue capacity is not guaranteed at that time.
       headers:
         Retry-After:
           description: Seconds to wait before retrying (at least 1).

@@ -103,7 +103,7 @@ func TestAdminLifecycleSanitization(t *testing.T) {
 	s, _, v := adminFixture(t)
 	s.workers["w"] = &worker{models: []string{"m", "other"}, version: "1.2.3", capacity: 2, lastSeen: time.Now(), gone: make(chan struct{})}
 	secret := randomAdminToken()
-	id := s.q.Submit(protocol.SubmitRequest{Model: "m", Prompt: secret, System: secret, DeadlineMS: 10000})
+	id := submitForTest(s.q, protocol.SubmitRequest{Model: "m", Prompt: secret, System: secret, DeadlineMS: 10000})
 	lease, _ := s.q.Claim(context.Background(), "w", []string{"m"}, 2)
 	check := func(online, capacity, active, free, leased, done int) {
 		t.Helper()

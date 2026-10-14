@@ -929,6 +929,7 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
             503: {
                 headers: {
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {

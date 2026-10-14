@@ -13,6 +13,7 @@ import (
 
 	"github.com/gkhntpbs/dumb/internal/auth"
 	"github.com/gkhntpbs/dumb/internal/protocol"
+	"github.com/gkhntpbs/dumb/internal/queue"
 )
 
 func adminDecode[T any](t *testing.T, s *Server, path, token string) T {
@@ -81,9 +82,9 @@ func TestAdminSnapshotClockAndWait(t *testing.T) {
 	wt := randomAdminToken()
 	a.Add("w1", auth.RoleWorker, wt)
 	publicCall(s, "POST", "/v1/workers/hello", wt, protocol.HelloRequest{WorkerVersion: "1.0.0", ProtocolVersion: protocol.Version, Models: []string{"m"}, Capacity: 2})
-	first := s.q.Submit(protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 600000})
+	first := submitForTest(s.q, protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 600000})
 	clock.Advance(3 * time.Second)
-	s.q.Submit(protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 600000})
+	submitForTest(s.q, protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 600000})
 	clock.Advance(4 * time.Second)
 	sum := adminDecode[protocol.AdminSummary](t, s, "/admin/v1/summary", v)
 	if !sum.Epoch.Equal(start) || !sum.SnapshotAt.Equal(start.Add(7*time.Second)) || sum.OldestQueuedMS != 7000 || sum.Queued != 2 {
@@ -127,7 +128,7 @@ func TestAdminSnapshotExpiryTTLAndGoodbye(t *testing.T) {
 			t.Fatalf("hello: %d %s", w.Code, w.Body)
 		}
 	}
-	s.q.Submit(protocol.SubmitRequest{Model: "m", Prompt: "x", DeadlineMS: 60000})
+	submitForTest(s.q, protocol.SubmitRequest{Model: "m", Prompt: "x", DeadlineMS: 60000})
 	clock.Advance(59 * time.Second)
 	if q := adminDecode[protocol.AdminQueue](t, s, "/admin/v1/queue?state=queued", v); q.Total != 1 {
 		t.Fatalf("before deadline: %+v", q)
@@ -163,8 +164,9 @@ func TestAdminSnapshotExpiryTTLAndGoodbye(t *testing.T) {
 // Pages are bounded, ordered newest first (creation time, then id), and never overlap.
 func TestAdminQueuePaginationBounds(t *testing.T) {
 	s, _, v := adminFixture(t)
+	s.q, _ = queue.NewWithLimits(queue.Limits{MaxActiveJobs: 128, MaxJobs: 256, MaxBytes: 256 << 20, CallerMaxActiveJobs: 128, CallerMaxJobs: 256, CallerMaxBytes: 256 << 20})
 	for range 120 {
-		s.q.Submit(protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 60000})
+		submitForTest(s.q, protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 60000})
 	}
 	first := adminDecode[protocol.AdminQueue](t, s, "/admin/v1/queue?limit=100", v)
 	second := adminDecode[protocol.AdminQueue](t, s, "/admin/v1/queue?limit=100&offset=100", v)
@@ -200,7 +202,11 @@ func TestAdminConcurrentSnapshots(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for ctx.Err() == nil {
-			id := s.q.Submit(protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 60000})
+			id, submitErr := s.q.Submit("caller", protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 60000})
+			if submitErr != nil {
+				time.Sleep(time.Millisecond)
+				continue
+			}
 			if l, err := s.q.Claim(ctx, "w", []string{"m"}, 4); err == nil && l != nil {
 				_ = s.q.Complete(id, l.LeaseID, "w", "o", "")
 			}

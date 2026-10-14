@@ -27,7 +27,7 @@ func claimNow(t *testing.T, q *Queue, worker string) *protocol.Assignment {
 
 func TestClaimComplete(t *testing.T) {
 	q := New()
-	id := q.Submit(req(time.Second))
+	id := submitForTest(q, req(time.Second))
 	a := claimNow(t, q, "w1")
 	if a == nil || a.JobID != id || a.LeaseID == "" {
 		t.Fatalf("claim: got %+v", a)
@@ -41,7 +41,7 @@ func TestClaimComplete(t *testing.T) {
 	if err := q.Complete(id, a.LeaseID, "w1", "out", ""); err != nil {
 		t.Fatal(err)
 	}
-	st, _ := q.Wait(context.Background(), id)
+	st, _ := q.Wait(context.Background(), "caller", id)
 	if st.State != protocol.StateDone || st.Output != "out" {
 		t.Fatalf("status: %+v", st)
 	}
@@ -52,10 +52,10 @@ func TestClaimComplete(t *testing.T) {
 
 func TestCompleteFailed(t *testing.T) {
 	q := New()
-	id := q.Submit(req(time.Second))
+	id := submitForTest(q, req(time.Second))
 	a := claimNow(t, q, "w1")
 	q.Complete(id, a.LeaseID, "w1", "", "model crashed")
-	st, _ := q.Wait(context.Background(), id)
+	st, _ := q.Wait(context.Background(), "caller", id)
 	if st.State != protocol.StateFailed || st.Error != "model crashed" {
 		t.Fatalf("status: %+v", st)
 	}
@@ -63,7 +63,7 @@ func TestCompleteFailed(t *testing.T) {
 
 func TestCompleteRequiresLeaseHolder(t *testing.T) {
 	q := New()
-	id := q.Submit(req(time.Second))
+	id := submitForTest(q, req(time.Second))
 	a := claimNow(t, q, "w1")
 	if err := q.Complete(id, a.LeaseID, "w2", "x", ""); err != ErrLease {
 		t.Errorf("other worker: got %v", err)
@@ -78,7 +78,7 @@ func TestCompleteRequiresLeaseHolder(t *testing.T) {
 
 func TestClaimSkipsOtherModels(t *testing.T) {
 	q := New()
-	q.Submit(protocol.SubmitRequest{Model: "other", Prompt: "x", DeadlineMS: 1000})
+	submitForTest(q, protocol.SubmitRequest{Model: "other", Prompt: "x", DeadlineMS: 1000})
 	if a := claimNow(t, q, "w1"); a != nil {
 		t.Fatalf("got job for a model the worker lacks: %+v", a)
 	}
@@ -86,14 +86,14 @@ func TestClaimSkipsOtherModels(t *testing.T) {
 
 func TestExpiredLeaseNotRedispatched(t *testing.T) {
 	q := New()
-	id := q.Submit(req(40 * time.Millisecond))
+	id := submitForTest(q, req(40*time.Millisecond))
 	a := claimNow(t, q, "w1")
 	time.Sleep(80 * time.Millisecond)
 
 	if err := q.Complete(id, a.LeaseID, "w1", "late", ""); err != ErrLease {
 		t.Errorf("late complete: got %v, want ErrLease", err)
 	}
-	st, _ := q.Wait(context.Background(), id)
+	st, _ := q.Wait(context.Background(), "caller", id)
 	if st.State != protocol.StateExpired {
 		t.Errorf("state: got %s, want expired", st.State)
 	}
@@ -104,7 +104,7 @@ func TestExpiredLeaseNotRedispatched(t *testing.T) {
 
 func TestExpiredWhileQueuedNotDispatched(t *testing.T) {
 	q := New()
-	q.Submit(req(20 * time.Millisecond))
+	submitForTest(q, req(20*time.Millisecond))
 	time.Sleep(50 * time.Millisecond)
 	if q.Pending() != 0 {
 		t.Fatal("expired job still pending")
@@ -116,14 +116,14 @@ func TestExpiredWhileQueuedNotDispatched(t *testing.T) {
 
 func TestWaitEndsAtContext(t *testing.T) {
 	q := New()
-	id := q.Submit(req(time.Second))
+	id := submitForTest(q, req(time.Second))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	st, err := q.Wait(ctx, id)
+	st, err := q.Wait(ctx, "caller", id)
 	if err != nil || st.State != protocol.StateQueued {
 		t.Fatalf("got %+v, %v", st, err)
 	}
-	if _, err := q.Wait(ctx, "nope"); err != ErrNotFound {
+	if _, err := q.Wait(ctx, "caller", "nope"); err != ErrNotFound {
 		t.Errorf("unknown: got %v", err)
 	}
 }
@@ -137,7 +137,7 @@ func TestClaimWakesOnSubmit(t *testing.T) {
 	}()
 	time.Sleep(20 * time.Millisecond) // let the claimer block
 	start := time.Now()
-	q.Submit(req(time.Second))
+	submitForTest(q, req(time.Second))
 	select {
 	case at := <-got:
 		if d := at.Sub(start); d > 50*time.Millisecond {
@@ -153,10 +153,10 @@ func TestClaimWakesOnSubmit(t *testing.T) {
 func TestWaitAtDeadlineReportsExpired(t *testing.T) {
 	for range 20 {
 		q := New()
-		id := q.Submit(protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 5})
-		d, _ := q.Deadline(id)
+		id := submitForTest(q, protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 5})
+		d, _ := q.Deadline("caller", id)
 		ctx, cancel := context.WithDeadline(context.Background(), d)
-		st, err := q.Wait(ctx, id)
+		st, err := q.Wait(ctx, "caller", id)
 		cancel()
 		if err != nil || st.State != protocol.StateExpired {
 			t.Fatalf("got %+v, %v; want expired", st, err)
@@ -180,7 +180,7 @@ func claimCap(t *testing.T, q *Queue, worker string, capacity int, wait time.Dur
 func TestCapacity(t *testing.T) {
 	q := New()
 	for range 4 {
-		q.Submit(req(time.Second))
+		submitForTest(q, req(time.Second))
 	}
 	a := claimCap(t, q, "w1", 2, 20*time.Millisecond)
 	b := claimCap(t, q, "w1", 2, 20*time.Millisecond)
@@ -227,8 +227,8 @@ func TestCapacityFreesOnExpiry(t *testing.T) {
 	q := New()
 	expired := make(chan string, 2)
 	q.OnExpire = func(id, _, w string) { expired <- id + "@" + w }
-	id := q.Submit(req(40 * time.Millisecond))
-	q.Submit(req(time.Second))
+	id := submitForTest(q, req(40*time.Millisecond))
+	submitForTest(q, req(time.Second))
 	if a := claimCap(t, q, "w1", 1, 20*time.Millisecond); a == nil || a.JobID != id {
 		t.Fatalf("claim: %+v", a)
 	}
@@ -245,8 +245,8 @@ func TestCapacityFreesOnExpiry(t *testing.T) {
 // back to the front of the queue, keeps its deadline and frees the lease.
 func TestReleaseRequeuesAtFront(t *testing.T) {
 	q := New()
-	first := q.Submit(req(time.Second))
-	q.Submit(req(time.Second))
+	first := submitForTest(q, req(time.Second))
+	submitForTest(q, req(time.Second))
 	a := claimCap(t, q, "w1", 1, 20*time.Millisecond)
 	if a.JobID != first {
 		t.Fatal("FIFO broken")
@@ -266,7 +266,7 @@ func TestReleaseRequeuesAtFront(t *testing.T) {
 	}
 	// Past its deadline a job is not requeued.
 	q2 := New()
-	q2.Submit(req(30 * time.Millisecond))
+	submitForTest(q2, req(30*time.Millisecond))
 	c := claimCap(t, q2, "w1", 1, 20*time.Millisecond)
 	time.Sleep(40 * time.Millisecond)
 	if q2.Release(c.JobID, c.LeaseID) || q2.Pending() != 0 {
@@ -278,7 +278,7 @@ func TestReleaseRequeuesAtFront(t *testing.T) {
 // unacknowledged one goes back to the front and its old lease is dead.
 func TestAckBlocksRevoke(t *testing.T) {
 	q := New()
-	q.Submit(req(time.Second))
+	submitForTest(q, req(time.Second))
 	a := claimCap(t, q, "w1", 1, 20*time.Millisecond)
 	if err := q.Ack(a.JobID, a.LeaseID, "w2"); err != ErrLease {
 		t.Fatalf("ack by another worker: %v", err)
@@ -290,7 +290,7 @@ func TestAckBlocksRevoke(t *testing.T) {
 		t.Fatal("acked lease revoked")
 	}
 
-	id := q.Submit(req(time.Second))
+	id := submitForTest(q, req(time.Second))
 	b := claimCap(t, q, "w2", 1, 20*time.Millisecond)
 	if b.JobID != id {
 		t.Fatal("wrong job")
@@ -313,4 +313,12 @@ func TestAckBlocksRevoke(t *testing.T) {
 	if d == nil || !q.RevokeUnacked(d.JobID, d.LeaseID) {
 		t.Fatal("ack carried over to the next lease")
 	}
+}
+
+func submitForTest(q *Queue, req protocol.SubmitRequest) string {
+	id, err := q.Submit("caller", req)
+	if err != nil {
+		panic(err)
+	}
+	return id
 }

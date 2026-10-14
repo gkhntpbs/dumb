@@ -28,6 +28,7 @@ import (
 
 	"github.com/gkhntpbs/dumb/internal/auth"
 	"github.com/gkhntpbs/dumb/internal/protocol"
+	"github.com/gkhntpbs/dumb/internal/queue"
 	"github.com/gkhntpbs/dumb/internal/server"
 )
 
@@ -51,6 +52,9 @@ func run() error {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	cfg := server.Config{Auth: tokens, MinWorkerVersion: env("DUMB_MIN_WORKER_VERSION", "0.0.0"), Logger: logger}
+	if cfg.QueueLimits, err = queueLimitsFromEnvironment(); err != nil {
+		return err
+	}
 	if v := os.Getenv("DUMB_ACK_WINDOW"); v != "" {
 		if cfg.AckWindow, err = time.ParseDuration(v); err != nil || cfg.AckWindow <= 0 {
 			return fmt.Errorf("DUMB_ACK_WINDOW: %q: want a positive Go duration (e.g. 2s)", v)
@@ -161,4 +165,31 @@ func loadTokens(path string) (*auth.StaticTokens, error) {
 		tokens.AddHash(fs[0], auth.Role(fs[1]), strings.ToLower(fs[2]))
 	}
 	return tokens, sc.Err()
+}
+
+func queueLimitsFromEnvironment() (queue.Limits, error) {
+	var limits queue.Limits
+	for _, field := range []struct {
+		key   string
+		value *int
+	}{
+		{"DUMB_QUEUE_MAX_ACTIVE_JOBS", &limits.MaxActiveJobs},
+		{"DUMB_QUEUE_MAX_JOBS", &limits.MaxJobs},
+		{"DUMB_QUEUE_MAX_BYTES", &limits.MaxBytes},
+		{"DUMB_QUEUE_CALLER_MAX_ACTIVE_JOBS", &limits.CallerMaxActiveJobs},
+		{"DUMB_QUEUE_CALLER_MAX_JOBS", &limits.CallerMaxJobs},
+		{"DUMB_QUEUE_CALLER_MAX_BYTES", &limits.CallerMaxBytes},
+	} {
+		if value, set := os.LookupEnv(field.key); set {
+			if value == "" || strings.Trim(value, "0123456789") != "" {
+				return limits, fmt.Errorf("%s: want a positive decimal integer", field.key)
+			}
+			parsed, err := strconv.Atoi(value)
+			if err != nil || parsed <= 0 {
+				return limits, fmt.Errorf("%s: want a positive decimal integer", field.key)
+			}
+			*field.value = parsed
+		}
+	}
+	return limits.Normalize()
 }

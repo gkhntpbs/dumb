@@ -4,6 +4,7 @@ package adminserver
 
 import (
 	"github.com/gkhntpbs/dumb/internal/auth"
+	"github.com/gkhntpbs/dumb/internal/queue"
 	"github.com/gkhntpbs/dumb/internal/server"
 	"net"
 )
@@ -12,6 +13,7 @@ type Principal = auth.Principal
 type Role = auth.Role
 type Authenticator = auth.Authenticator
 type SessionProvider = server.AdminSessionProvider
+type QueueLimits = queue.Limits
 type Config = server.Config
 type Server = server.Server
 

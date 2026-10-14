@@ -14,6 +14,11 @@ Design rules this project holds itself to:
   authentication is limited per client IP: once an IP's bucket is empty its
   requests get `429` before their token is checked. `X-Forwarded-For` is only
   believed from configured trusted proxies (`DUMB_TRUSTED_PROXIES`).
+- Job status and result lookup require the authenticated submitting caller
+  principal. Another caller receives the same immediate 404 as an unknown job.
+- Queue admission bounds active/retained job counts and accounted payload bytes
+  globally and per caller; accepted jobs reserve their result budget. See
+  `docs/queue-admission.md` for limits and accounting scope.
 - Logs never contain tokens, prompts or outputs, only their sizes.
 - The Linux system unit runs as a dedicated `dumb` user under systemd sandboxing
   (`docs/service.md`).

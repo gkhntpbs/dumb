@@ -194,3 +194,42 @@ test("consumer abort rejects even when an injected fallback ignores the signal",
   await assert.rejects(pending,/consumer ended/);
   release("late result");
 });
+
+test("global queue saturation invokes consumer fallback once without retry or job polling", async () => {
+  const calls = [];
+  let fallbacks = 0;
+  const c = client(async (url, init) => {
+    calls.push({ url, init });
+    return response(503, { error: "queue capacity exhausted" }, { "Retry-After": "1" });
+  });
+  const result = await c.execute(request, { fallback: async (input, context) => {
+    fallbacks++;
+    assert.deepEqual(input, request);
+    assert.equal(context.reason, "unavailable");
+    assert.equal(context.job, undefined);
+    return "consumer result";
+  } });
+  assert.equal(result.source, "fallback");
+  assert.equal(result.value, "consumer result");
+  assert.equal(fallbacks, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].url.pathname, "/v1/jobs");
+});
+
+test("caller queue saturation exposes retry advice without implicit retry or fallback", async () => {
+  let calls = 0;
+  let fallbacks = 0;
+  const c = client(async () => {
+    calls++;
+    return response(429, { error: "caller queue capacity exhausted" }, { "Retry-After": "1" });
+  });
+  await assert.rejects(c.execute(request, { fallback: async () => { fallbacks++; } }), error => {
+    assert.ok(error instanceof HTTPError);
+    assert.equal(error.status, 429);
+    assert.equal(error.retryAfter, "1");
+    return true;
+  });
+  assert.equal(calls, 1);
+  assert.equal(fallbacks, 0);
+});

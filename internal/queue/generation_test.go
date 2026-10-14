@@ -12,7 +12,7 @@ func TestExpiredLeaseRejectedBeforeTimer(t *testing.T) {
 	for _, operation := range []string{"ack", "complete"} {
 		t.Run(operation, func(t *testing.T) {
 			q := New()
-			id := q.Submit(protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 5000})
+			id := submitForTest(q, protocol.SubmitRequest{Model: "m", Prompt: "p", DeadlineMS: 5000})
 			a, _ := q.Claim(context.Background(), "w", []string{"m"}, 1)
 			q.mu.Lock()
 			q.jobs[id].deadline = time.Now().Add(-time.Second)

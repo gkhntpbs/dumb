@@ -19,7 +19,11 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("job not found")
+	ErrNotFound       = errors.New("job not found")
+	ErrCallerCapacity = errors.New("caller queue capacity exhausted")
+	ErrCapacity       = errors.New("queue capacity exhausted")
+	ErrResultTooLarge = errors.New("result payload exceeds maximum bytes")
+	ErrOwner          = errors.New("caller identity is required")
 	// ErrLease means the lease is unknown, expired, already used, or held by another worker.
 	ErrLease = errors.New("lease is not valid")
 )
@@ -28,23 +32,32 @@ var (
 const Retention = time.Minute
 
 type job struct {
-	created  time.Time
-	leased   time.Time
-	req      protocol.SubmitRequest
-	id       string
-	deadline time.Time
-	state    string
-	leaseID  string
-	workerID string
-	output   string
-	err      string
-	acked    bool          // the lease holder acknowledged the assignment
-	done     chan struct{} // closed when state becomes done, failed or expired
+	bytes          int
+	retainUntil    time.Time
+	deadlineTimer  *time.Timer
+	retentionTimer *time.Timer
+	owner          string
+	created        time.Time
+	leased         time.Time
+	req            protocol.SubmitRequest
+	id             string
+	deadline       time.Time
+	state          string
+	leaseID        string
+	workerID       string
+	output         string
+	err            string
+	acked          bool          // the lease holder acknowledged the assignment
+	done           chan struct{} // closed when state becomes done, failed or expired
 
 	expireUnreported bool // expired, OnExpire not called yet
 }
 
 type Queue struct {
+	limits    Limits
+	total     usage
+	callers   map[string]*usage
+	reports   []expiration
 	completed int
 	failed    int
 	expired   int
@@ -63,7 +76,16 @@ type Queue struct {
 }
 
 func New() *Queue {
-	return &Queue{now: time.Now, jobs: map[string]*job{}, leases: map[string]int{}, wake: make(chan struct{})}
+	q, _ := NewWithLimits(Limits{})
+	return q
+}
+
+func NewWithLimits(limits Limits) (*Queue, error) {
+	limits, err := limits.Normalize()
+	if err != nil {
+		return nil, err
+	}
+	return &Queue{limits: limits, callers: map[string]*usage{}, now: time.Now, jobs: map[string]*job{}, leases: map[string]int{}, wake: make(chan struct{})}, nil
 }
 
 // SetClock replaces the clock used for deadlines, wait times and observations.
@@ -83,32 +105,54 @@ func newID() string {
 }
 
 // Submit queues a job that must finish within its DeadlineMS and returns its ID.
-func (q *Queue) Submit(req protocol.SubmitRequest) string {
+func (q *Queue) Submit(owner string, req protocol.SubmitRequest) (string, error) {
+	defer q.flushExpirations()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.cleanupLocked()
+	if owner == "" {
+		return "", ErrOwner
+	}
+	bytes, fits := boundedRequestBytes(q.limits.CallerMaxBytes-MaxResultBytes, owner, req.Model, req.Prompt, req.System, req.Format)
+	if !fits {
+		return "", ErrCallerCapacity
+	}
+	bytes += MaxResultBytes
+	u := q.callers[owner]
+	if u == nil {
+		u = &usage{}
+	}
+	if u.active >= q.limits.CallerMaxActiveJobs || u.jobs >= q.limits.CallerMaxJobs || bytes > q.limits.CallerMaxBytes-u.bytes {
+		return "", ErrCallerCapacity
+	}
+	if q.total.active >= q.limits.MaxActiveJobs || q.total.jobs >= q.limits.MaxJobs || bytes > q.limits.MaxBytes-q.total.bytes {
+		return "", ErrCapacity
+	}
 	ttl := time.Duration(req.DeadlineMS) * time.Millisecond
 	now := q.now()
-	j := &job{
-		created:  now,
-		req:      req,
-		id:       newID(),
-		deadline: now.Add(ttl),
-		state:    protocol.StateQueued,
-		done:     make(chan struct{}),
-	}
-	q.mu.Lock()
+	j := &job{owner: owner, bytes: bytes, created: now, req: req, id: newID(), deadline: now.Add(ttl), state: protocol.StateQueued, done: make(chan struct{})}
 	q.jobs[j.id] = j
 	q.pending = append(q.pending, j)
+	q.callers[owner] = u
+	u.active++
+	u.jobs++
+	u.bytes += bytes
+	q.total.active++
+	q.total.jobs++
+	q.total.bytes += bytes
+	j.deadlineTimer = time.AfterFunc(ttl, func() { q.expire(j) })
 	q.wakeLocked()
-	q.mu.Unlock()
-	time.AfterFunc(ttl, func() { q.expire(j) })
-	return j.id
+	return j.id, nil
 }
 
 // Claim blocks until a queued job for one of models is available and workerID
 // holds fewer than capacity live leases, then leases the job to workerID. It
 // returns nil, nil when ctx ends first.
 func (q *Queue) Claim(ctx context.Context, workerID string, models []string, capacity int) (*protocol.Assignment, error) {
+	defer q.flushExpirations()
 	for {
 		q.mu.Lock()
+		q.cleanupLocked()
 		now := q.now()
 		for i, j := range q.pending {
 			if q.leases[workerID] >= capacity {
@@ -139,6 +183,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, models []string, cap
 		}
 		wake := q.wake
 		q.mu.Unlock()
+		q.flushExpirations()
 		select {
 		case <-ctx.Done():
 			return nil, nil
@@ -150,11 +195,16 @@ func (q *Queue) Claim(ctx context.Context, workerID string, models []string, cap
 // Complete records the result of a leased job. Only the worker holding the
 // live lease may complete it; errMsg != "" marks the job failed.
 func (q *Queue) Complete(jobID, leaseID, workerID, output, errMsg string) error {
+	defer q.flushExpirations()
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.cleanupLocked()
 	j, ok := q.jobs[jobID]
 	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID || !q.now().Before(j.deadline) {
 		return ErrLease
+	}
+	if len(output) > MaxResultBytes-len(errMsg) {
+		return ErrResultTooLarge
 	}
 	q.endLeaseLocked(j)
 	if errMsg != "" {
@@ -172,8 +222,10 @@ func (q *Queue) Complete(jobID, leaseID, workerID, output, errMsg string) error 
 // Ack records that the worker holding the live lease received the
 // assignment. Acking twice is fine; any other lease gets ErrLease.
 func (q *Queue) Ack(jobID, leaseID, workerID string) error {
+	defer q.flushExpirations()
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.cleanupLocked()
 	j, ok := q.jobs[jobID]
 	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID || !q.now().Before(j.deadline) {
 		return ErrLease
@@ -185,8 +237,10 @@ func (q *Queue) Ack(jobID, leaseID, workerID string) error {
 // RevokeUnacked is Release for a lease that was never acknowledged: it
 // requeues the job at the front unless Ack (or a result) came first.
 func (q *Queue) RevokeUnacked(jobID, leaseID string) bool {
+	defer q.flushExpirations()
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.cleanupLocked()
 	j, ok := q.jobs[jobID]
 	if !ok || j.acked {
 		return false
@@ -199,8 +253,10 @@ func (q *Queue) RevokeUnacked(jobID, leaseID string) bool {
 // (the long-poll was aborted in the instant the job was claimed). It reports
 // whether the job was requeued; a job past its deadline is left to expire.
 func (q *Queue) Release(jobID, leaseID string) bool {
+	defer q.flushExpirations()
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.cleanupLocked()
 	j, ok := q.jobs[jobID]
 	return ok && q.releaseLocked(j, leaseID)
 }
@@ -219,8 +275,10 @@ func (q *Queue) releaseLocked(j *job, leaseID string) bool {
 
 // Leases returns the number of live leases workerID holds.
 func (q *Queue) Leases(workerID string) int {
+	defer q.flushExpirations()
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.cleanupLocked()
 	return q.leases[workerID]
 }
 
@@ -233,11 +291,14 @@ func (q *Queue) endLeaseLocked(j *job) {
 }
 
 // Wait blocks until the job finishes or ctx ends, then returns its status.
-func (q *Queue) Wait(ctx context.Context, jobID string) (protocol.JobStatus, error) {
+func (q *Queue) Wait(ctx context.Context, owner, jobID string) (protocol.JobStatus, error) {
+	defer q.flushExpirations()
 	q.mu.Lock()
+	q.cleanupLocked()
 	j, ok := q.jobs[jobID]
 	q.mu.Unlock()
-	if !ok {
+	q.flushExpirations()
+	if !ok || j.owner != owner {
 		return protocol.JobStatus{}, ErrNotFound
 	}
 	select {
@@ -245,6 +306,11 @@ func (q *Queue) Wait(ctx context.Context, jobID string) (protocol.JobStatus, err
 	case <-ctx.Done():
 	}
 	q.mu.Lock()
+	q.cleanupLocked()
+	if q.jobs[j.id] != j {
+		q.mu.Unlock()
+		return protocol.JobStatus{}, ErrNotFound
+	}
 	// The caller's wait is usually clamped to the deadline, so it can end a hair
 	// before the expiry timer fires; a past deadline is expired either way.
 	if !q.now().Before(j.deadline) {
@@ -257,11 +323,13 @@ func (q *Queue) Wait(ctx context.Context, jobID string) (protocol.JobStatus, err
 }
 
 // Deadline returns the job's deadline.
-func (q *Queue) Deadline(jobID string) (time.Time, error) {
+func (q *Queue) Deadline(owner, jobID string) (time.Time, error) {
+	defer q.flushExpirations()
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.cleanupLocked()
 	j, ok := q.jobs[jobID]
-	if !ok {
+	if !ok || j.owner != owner {
 		return time.Time{}, ErrNotFound
 	}
 	return j.deadline, nil
@@ -269,8 +337,10 @@ func (q *Queue) Deadline(jobID string) (time.Time, error) {
 
 // Pending returns the number of queued jobs.
 func (q *Queue) Pending() int {
+	defer q.flushExpirations()
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.cleanupLocked()
 	return len(q.pending)
 }
 
@@ -301,22 +371,32 @@ func (q *Queue) expireLocked(j *job) {
 }
 
 // notify calls OnExpire once for a job expireLocked has just expired.
-func (q *Queue) notify(j *job) {
-	q.mu.Lock()
-	report := j.expireUnreported
-	j.expireUnreported = false
-	id, m, w := j.id, j.req.Model, j.workerID
-	q.mu.Unlock()
-	if report && q.OnExpire != nil {
-		q.OnExpire(id, m, w)
-	}
-}
+func (q *Queue) notify(j *job) { q.flushExpirations() }
 
 func (q *Queue) finishLocked(j *job) {
+	if j.deadlineTimer != nil {
+		j.deadlineTimer.Stop()
+	}
+	if j.expireUnreported {
+		q.reports = append(q.reports, expiration{j.id, j.req.Model, j.workerID})
+		j.expireUnreported = false
+	}
+	oldBytes := j.bytes
+	j.req.Prompt = ""
+	j.req.System = ""
+	j.req.Format = ""
+	j.req.NumPredict = 0
+	j.bytes = len(j.owner) + len(j.req.Model) + len(j.output) + len(j.err)
+	q.total.active--
+	q.total.bytes -= oldBytes - j.bytes
+	u := q.callers[j.owner]
+	u.active--
+	u.bytes -= oldBytes - j.bytes
 	close(j.done)
-	time.AfterFunc(Retention, func() {
-		q.mu.Lock()
-		delete(q.jobs, j.id)
-		q.mu.Unlock()
-	})
+	finished := q.now()
+	if j.state == protocol.StateExpired {
+		finished = j.deadline
+	}
+	j.retainUntil = finished.Add(Retention)
+	j.retentionTimer = time.AfterFunc(max(j.retainUntil.Sub(q.now()), 0), func() { q.mu.Lock(); q.removeLocked(j); q.mu.Unlock() })
 }
