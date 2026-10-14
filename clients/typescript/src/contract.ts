@@ -449,6 +449,14 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        QueueUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         TooManyRequests: {
             headers: {
                 "Retry-After"?: number;
@@ -468,6 +476,7 @@ export interface components {
         };
     };
     parameters: {
+        IdempotencyKey: string;
         AdminModel: string;
         AdminWorkerState: "online-idle" | "online-busy" | "offline";
         AdminJobState: "queued" | "leased" | "done" | "failed" | "expired";
@@ -805,6 +814,7 @@ export interface operations {
             };
             426: components["responses"]["UpgradeRequired"];
             429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["QueueUnavailable"];
         };
     };
     ackJob: {
@@ -843,6 +853,7 @@ export interface operations {
             };
             426: components["responses"]["UpgradeRequired"];
             429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["QueueUnavailable"];
         };
     };
     submitResult: {
@@ -881,6 +892,7 @@ export interface operations {
             };
             426: components["responses"]["UpgradeRequired"];
             429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["QueueUnavailable"];
         };
     };
     submitJob: {
@@ -890,6 +902,7 @@ export interface operations {
             };
             header?: {
                 "X-Request-ID"?: components["parameters"]["RequestID"];
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
             cookie?: never;
@@ -918,6 +931,14 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -988,6 +1009,7 @@ export interface operations {
                 };
             };
             429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["QueueUnavailable"];
         };
     };
     getStatus: {
@@ -1015,4 +1037,4 @@ export interface operations {
     };
 }
 
-export const limits = {"maxDeadlineMs":600000,"maxNumPredict":128,"defaultNumPredict":128} as const;
+export const limits = {"maxDeadlineMs":600000,"maxNumPredict":128,"defaultNumPredict":128,"maxIdempotencyKeyLength":64,"idempotencyKeyPattern":"^[A-Za-z0-9._:-]{1,64}$"} as const;

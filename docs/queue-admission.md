@@ -1,8 +1,9 @@
 # Queue admission and caller ownership
 
-The queue is in memory. This change does not add durability, idempotent
-submission, cancellation or a persistence guarantee across server restarts.
-The authority for HTTP behavior is `docs/protocol/openapi.yaml`.
+The queue supports explicit volatile mode and an optional private durable store.
+`docs/durable-queue.md` documents process recovery and caller-scoped idempotent
+submission. This change does not add cancellation. The authority for HTTP
+behavior is `docs/protocol/openapi.yaml`.
 
 Every accepted job belongs to the authenticated caller principal ID. The request
 cannot select or override that ID. A replacement credential for the same

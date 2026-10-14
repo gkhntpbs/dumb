@@ -310,6 +310,7 @@ paths:
         "204":
           description: No job arrived within `wait` (or the worker stayed at capacity).
         "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/QueueUnavailable" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
         "409":
@@ -342,6 +343,7 @@ paths:
         "204":
           description: Acknowledged; the lease runs until `lease_expires_at`.
         "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/QueueUnavailable" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
         "409":
@@ -373,6 +375,7 @@ paths:
         "204":
           description: Result accepted.
         "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/QueueUnavailable" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
         "409":
@@ -399,8 +402,24 @@ paths:
         rather than a guarantee. Finished jobs remain readable for one minute;
         active reservations are released on completion or deadline expiry, and
         retained result bytes and slots are released when retention ends.
+        With a configured private state directory, acknowledged submissions,
+        leases, acknowledgements and results survive process restart. Without
+        one, the queue is explicitly volatile. Original deadlines and one-minute
+        terminal retention are never extended by restart or retry. Live leases
+        retain their worker and lease ID; pending acknowledgement windows retain
+        their original due time and can revoke the old lease after recovery.
+        Storage failure returns 503 and blocks queue operations until restart.
+        An optional Idempotency-Key is scoped to the authenticated caller.
+        Repeating the key with the same normalized request returns the original
+        job before checking worker availability or admission limits. Different
+        payloads return 409. Normalization treats omitted or zero num_predict
+        as 128; wait and request IDs do not affect identity. The key is retained
+        exactly as long as its job, then may be reused for a new job. Clients
+        must retain their key across ambiguous responses; no automatic retry or
+        exactly-once execution across external failures is promised.
       parameters:
         - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/IdempotencyKey"
         - name: wait
           in: query
           description: >
@@ -426,13 +445,18 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
+        "409":
+          description: The caller already used this idempotency key with another normalized request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "410":
           description: The deadline passed without a result.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/JobStatus" }
         "503":
-          description: No online worker serves this model, or global queue capacity is exhausted. Take the fallback path now.
+          description: No online worker serves this model, global queue or persistent storage capacity is exhausted, or storage is unavailable. Take the fallback path now.
           headers:
             Retry-After:
               description: Present as 1 when global queue capacity is exhausted.
@@ -468,6 +492,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/JobStatus" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/QueueUnavailable" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
         "404":
@@ -511,6 +536,13 @@ components:
         separate admin-read role permits only admin metadata endpoints; caller and
         worker roles cannot access them and admin-read cannot perform their operations.
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Caller-owned retry key; retained until this job leaves terminal retention.
+      schema: { type: string, minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9._:-]{1,64}$" }
+
     AdminModel:
       name: model
       in: query
@@ -560,6 +592,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     Unauthorized:
       description: Missing, wrong or revoked credential, or the wrong role.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    QueueUnavailable:
+      description: Persistent queue storage is unavailable or its configured capacity is exhausted. No transition is acknowledged on failure.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

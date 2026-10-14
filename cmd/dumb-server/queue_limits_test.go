@@ -41,3 +41,39 @@ func TestQueueLimitsEnvironment(t *testing.T) {
 		t.Fatalf("configured: %+v %v", limits, err)
 	}
 }
+
+func TestQueueStateEnvironment(t *testing.T) {
+	for _, key := range []string{"DUMB_QUEUE_STATE_DIRECTORY", "DUMB_QUEUE_STATE_MAX_BYTES"} {
+		value, set := os.LookupEnv(key)
+		os.Unsetenv(key)
+		t.Cleanup(func() {
+			if set {
+				os.Setenv(key, value)
+			} else {
+				os.Unsetenv(key)
+			}
+		})
+	}
+	directory, maxBytes, err := queueStateFromEnvironment()
+	if err != nil || directory != "" || maxBytes != 0 {
+		t.Fatalf("volatile defaults: %q %d %v", directory, maxBytes, err)
+	}
+	t.Setenv("DUMB_QUEUE_STATE_DIRECTORY", "/private/state")
+	for _, invalid := range []string{"", "0", "-1", "+1", "1.5", "off", " 2", "99999999999999999999999999999999"} {
+		t.Run(invalid, func(t *testing.T) {
+			t.Setenv("DUMB_QUEUE_STATE_MAX_BYTES", invalid)
+			if _, _, err := queueStateFromEnvironment(); err == nil {
+				t.Fatal("invalid accepted")
+			}
+		})
+	}
+	t.Setenv("DUMB_QUEUE_STATE_MAX_BYTES", "268435456")
+	directory, maxBytes, err = queueStateFromEnvironment()
+	if err != nil || directory != "/private/state" || maxBytes != queue.DefaultStateMaxBytes {
+		t.Fatalf("configured: %q %d %v", directory, maxBytes, err)
+	}
+	t.Setenv("DUMB_QUEUE_STATE_DIRECTORY", "")
+	if _, _, err = queueStateFromEnvironment(); err == nil {
+		t.Fatal("byte limit without state directory accepted")
+	}
+}

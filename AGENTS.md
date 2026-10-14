@@ -2,7 +2,7 @@
 
 DUMB (Distributed User-owned Model Backend): the protocol, the server (`cmd/dumb-server`), the
 worker (`cmd/dumb-worker`) and the `Auth` interface, in Go. **Status:** protocol v1 is defined; the server
-has an in-memory queue with leases (capacity enforced), long-poll and caller endpoints, a static-token
+has a bounded queue with optional private durable storage and caller-scoped idempotency, leases (capacity enforced), long-poll and caller endpoints, a static-token
 `Auth`, per-principal / per-IP rate limits, `log/slog` logging with request ids, claim
 acknowledgement (an unacked lease of an `ack`-capable worker is revoked after `DUMB_ACK_WINDOW`,
 default 2s) and worker goodbye (offline at once, callers get the immediate 503).

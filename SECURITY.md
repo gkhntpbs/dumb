@@ -19,6 +19,9 @@ Design rules this project holds itself to:
 - Queue admission bounds active/retained job counts and accounted payload bytes
   globally and per caller; accepted jobs reserve their result budget. See
   `docs/queue-admission.md` for limits and accounting scope.
+- Durable job state is private, owner-held mode 0700/0600 storage with an
+  exclusive process lock. Corrupt state and uncertain writes fail closed.
+  Caller-scoped retry keys never grant access to another caller's jobs.
 - Logs never contain tokens, prompts or outputs, only their sizes.
 - The Linux system unit runs as a dedicated `dumb` user under systemd sandboxing
   (`docs/service.md`).

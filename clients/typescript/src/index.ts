@@ -23,12 +23,17 @@ export interface WaitOptions extends RequestOptions {
   waitMs?: number;
 }
 
+export interface SubmitOptions extends WaitOptions {
+ idempotencyKey?: string;
+}
+
 export interface FallbackContext extends RequestOptions {
   reason: FallbackReason;
   job?: JobStatus;
 }
 
 export interface ExecuteOptions<T> extends RequestOptions {
+ idempotencyKey?: string;
   hedgeMs?: number;
   fallback?: (request: SubmitRequest, context: FallbackContext) => Promise<T>;
 }
@@ -115,12 +120,16 @@ export class DUMBClient {
     this.#fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
-  async #request(method: "GET" | "POST", path: keyof paths | string, query: string, body: SubmitRequest | undefined, options: RequestOptions, accepted: number[]): Promise<unknown> {
+  async #request(method: "GET" | "POST", path: keyof paths | string, query: string, body: SubmitRequest | undefined, options: RequestOptions & { idempotencyKey?: string }, accepted: number[]): Promise<unknown> {
     options.signal?.throwIfAborted();
     const url = new URL(path.replace(/^\//, ""), this.#base);
     url.search = query;
     const headers = new Headers({ Authorization: `Bearer ${this.#token}` });
     if (options.requestId !== undefined) headers.set("X-Request-ID", options.requestId);
+    if (options.idempotencyKey !== undefined) {
+      if (!new RegExp(limits.idempotencyKeyPattern).test(options.idempotencyKey)) throw new RangeError("idempotencyKey must be 1 to 64 letters, digits, dots, underscores, colons or hyphens");
+      if (method === "POST") headers.set("Idempotency-Key", options.idempotencyKey);
+    }
     const init: RequestInit = { method, headers, redirect: "error" };
     if (options.signal !== undefined) init.signal = options.signal;
     if (body !== undefined) {
@@ -146,7 +155,7 @@ export class DUMBClient {
     }
   }
 
-  async submit(request: SubmitRequest, options: WaitOptions = {}): Promise<JobStatus> {
+  async submit(request: SubmitRequest, options: SubmitOptions = {}): Promise<JobStatus> {
     validateRequest(request);
     return jobStatus(await this.#request("POST", "/v1/jobs", waitQuery(options.waitMs), request, options, [200, 202, 410]));
   }
@@ -178,7 +187,9 @@ export class DUMBClient {
     try {
       const pending: WaitOptions = { signal: controller.signal };
       if (options.requestId !== undefined) pending.requestId = options.requestId;
-      job = await this.submit(request, { ...pending, waitMs: budget });
+      const submission: SubmitOptions = { ...pending, waitMs: budget };
+      if (options.idempotencyKey !== undefined) submission.idempotencyKey = options.idempotencyKey;
+      job = await this.submit(request, submission);
       while (job.state === "queued" || job.state === "leased") {
         const remaining = budget - (performance.now() - started);
         if (remaining <= 0) throw new JobError(reason, job);

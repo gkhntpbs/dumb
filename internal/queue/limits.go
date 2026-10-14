@@ -51,6 +51,9 @@ func requestBytes(owner string, reqModel, prompt, system, format string) int {
 }
 
 func (q *Queue) cleanupLocked() {
+	if q.closed || (q.store != nil && q.store.poisoned) {
+		return
+	}
 	now := q.now()
 	for _, j := range q.jobs {
 		if j.state == protocol.StateQueued || j.state == protocol.StateLeased {
@@ -58,6 +61,7 @@ func (q *Queue) cleanupLocked() {
 				q.expireLocked(j)
 			}
 		}
+		q.expireAckLocked(j)
 		if !j.retainUntil.IsZero() && !now.Before(j.retainUntil) {
 			q.removeLocked(j)
 		}
@@ -67,6 +71,13 @@ func (q *Queue) cleanupLocked() {
 func (q *Queue) removeLocked(j *job) {
 	if q.jobs[j.id] != j {
 		return
+	}
+	if err := q.store.delete(j.id); err != nil {
+		q.haltLocked()
+		return
+	}
+	if j.key != "" {
+		delete(q.keys, retryKey{j.owner, j.key})
 	}
 	delete(q.jobs, j.id)
 	if j.retentionTimer != nil {

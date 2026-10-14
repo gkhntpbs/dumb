@@ -107,3 +107,14 @@ adding a deliberately failing JavaScript assertion then made the same Go
 command fail with exit 1. Both mutations were restored before the final gate.
 This verifies the gate observes TypeScript test edits instead of reusing a
 stale Go subprocess result.
+
+## Explicit idempotent retry
+
+Pass a consumer-owned `idempotencyKey` to `submit` or `execute` when resolving an
+ambiguous accepted POST. The same caller, key and normalized payload return the
+original job before online-worker or admission checks; a payload conflict is
+HTTP 409. Keys match the generated contract pattern and remain available until
+one minute after the job finishes or expires. Reusing a key after retention
+creates new work. Durable servers preserve the mapping across process restart;
+explicit volatile servers do not. The client never generates keys or retries
+implicitly. See `../../docs/durable-queue.md` for storage and recovery semantics.

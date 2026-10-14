@@ -41,7 +41,7 @@ func main() {
 	}
 }
 
-func run() error {
+func run() (result error) {
 	tokens, err := loadTokens(os.Getenv("DUMB_TOKENS_FILE"))
 	if err != nil {
 		return err
@@ -52,6 +52,9 @@ func run() error {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	cfg := server.Config{Auth: tokens, MinWorkerVersion: env("DUMB_MIN_WORKER_VERSION", "0.0.0"), Logger: logger}
+	if cfg.QueueStateDirectory, cfg.QueueStateMaxBytes, err = queueStateFromEnvironment(); err != nil {
+		return err
+	}
 	if cfg.QueueLimits, err = queueLimitsFromEnvironment(); err != nil {
 		return err
 	}
@@ -75,6 +78,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer func() { result = errors.Join(result, srv.Close()) }()
 	addr := env("DUMB_ADDR", "127.0.0.1:8080")
 	logger.Info("dumb-server starting", "version", version, "protocol", protocol.Version, "addr", addr)
 	hs := &http.Server{Addr: addr, Handler: srv, ReadHeaderTimeout: 10 * time.Second}
@@ -192,4 +196,20 @@ func queueLimitsFromEnvironment() (queue.Limits, error) {
 		}
 	}
 	return limits.Normalize()
+}
+
+func queueStateFromEnvironment() (string, int64, error) {
+	directory := os.Getenv("DUMB_QUEUE_STATE_DIRECTORY")
+	var maxBytes int64
+	if value, set := os.LookupEnv("DUMB_QUEUE_STATE_MAX_BYTES"); set {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed <= 0 || strings.Trim(value, "0123456789") != "" {
+			return "", 0, errors.New("DUMB_QUEUE_STATE_MAX_BYTES: want a positive decimal integer")
+		}
+		maxBytes = parsed
+	}
+	if directory == "" && maxBytes != 0 {
+		return "", 0, errors.New("DUMB_QUEUE_STATE_DIRECTORY is required with DUMB_QUEUE_STATE_MAX_BYTES")
+	}
+	return directory, maxBytes, nil
 }

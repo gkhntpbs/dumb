@@ -30,14 +30,16 @@ const MaxBodyBytes = 1 << 20
 const DefaultAckWindow = 2 * time.Second
 
 type Config struct {
-	QueueLimits      queue.Limits
-	AdminSessions    AdminSessionProvider // optional browser authentication; implementation belongs to the embedding application
-	Auth             auth.Authenticator
-	MinWorkerVersion string           // e.g. "0.1.0"
-	MaxWait          time.Duration    // cap on GET /v1/jobs/next?wait=; default 25s
-	OnlineTTL        time.Duration    // a worker is online this long after its last request; default MaxWait+10s
-	Now              func() time.Time // clock for worker freshness and admin observations; default time.Now
-	Logger           *slog.Logger     // default: discard. Never receives tokens, prompts or outputs.
+	QueueLimits         queue.Limits
+	QueueStateDirectory string
+	QueueStateMaxBytes  int64
+	AdminSessions       AdminSessionProvider // optional browser authentication; implementation belongs to the embedding application
+	Auth                auth.Authenticator
+	MinWorkerVersion    string           // e.g. "0.1.0"
+	MaxWait             time.Duration    // cap on GET /v1/jobs/next?wait=; default 25s
+	OnlineTTL           time.Duration    // a worker is online this long after its last request; default MaxWait+10s
+	Now                 func() time.Time // clock for worker freshness and admin observations; default time.Now
+	Logger              *slog.Logger     // default: discard. Never receives tokens, prompts or outputs.
 	// AckWindow is how long a worker that announced the "ack" feature has to
 	// acknowledge an assignment before its lease is revoked and the job goes
 	// back to the front of the queue. Never beyond the job's deadline.
@@ -106,7 +108,7 @@ func New(cfg Config) (*Server, error) {
 	cfg.WorkerRate = cfg.WorkerRate.orDefault(DefaultWorkerRate)
 	cfg.CallerRate = cfg.CallerRate.orDefault(DefaultCallerRate)
 	cfg.UnauthRate = cfg.UnauthRate.orDefault(DefaultUnauthRate)
-	q, err := queue.NewWithLimits(cfg.QueueLimits)
+	q, err := queue.Open(cfg.QueueLimits, queue.StoreConfig{Directory: cfg.QueueStateDirectory, MaxBytes: cfg.QueueStateMaxBytes}, cfg.Now)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +117,7 @@ func New(cfg Config) (*Server, error) {
 		callerLim: newLimiter(cfg.CallerRate, time.Now),
 		unauthLim: newLimiter(cfg.UnauthRate, time.Now),
 	}
-	s.q.SetClock(cfg.Now)
+
 	s.q.OnExpire = func(jobID, model, workerID string) {
 		if workerID == "" {
 			s.log.Warn("job expired", "job_id", jobID, "model", model, "was", protocol.StateQueued)
@@ -362,10 +364,14 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal)
 		case <-ctx.Done():
 		}
 	}()
-	a, err := s.q.Claim(ctx, p.ID, models, capacity)
+	ackWindow := time.Duration(0)
+	if needAck {
+		ackWindow = s.cfg.AckWindow
+	}
+	a, err := s.q.ClaimWithAck(ctx, p.ID, models, capacity, ackWindow)
 	switch {
 	case err != nil:
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	case a == nil:
 		w.WriteHeader(http.StatusNoContent)
@@ -386,18 +392,7 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal)
 		l.Warn("claim not delivered", "job_id", a.JobID, "worker", p.ID, "requeued", requeued, "err", err)
 		return
 	}
-	if needAck {
-		// A response flushed into a dead connection reports no error. A worker
-		// that acks proves it got the job; without the ack in time, the job
-		// goes back to the front for another worker.
-		window := min(s.cfg.AckWindow, time.Until(a.LeaseExpiresAt))
-		jobID, leaseID, log := a.JobID, a.LeaseID, s.log
-		time.AfterFunc(window, func() {
-			if s.q.RevokeUnacked(jobID, leaseID) {
-				log.Warn("lease revoked: no ack", "job_id", jobID, "worker", p.ID, "ack_window", window.String())
-			}
-		})
-	}
+
 	l.Info("job claimed", "job_id", a.JobID, "worker", p.ID, "model", a.Model,
 		"prompt_bytes", len(a.Prompt), "system_bytes", len(a.System), "lease_expires_at", a.LeaseExpiresAt, "ack", needAck)
 }
@@ -415,7 +410,11 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request, p auth.Principal) {
 	id := r.PathValue("id")
 	if err := s.q.Ack(id, req.LeaseID, p.ID); err != nil {
 		s.reqLog(r).Info("ack refused", "job_id", id, "worker", p.ID, "err", err)
-		writeError(w, http.StatusConflict, err.Error())
+		code := http.StatusConflict
+		if errors.Is(err, queue.ErrStorage) || errors.Is(err, queue.ErrStorageCapacity) {
+			code = http.StatusServiceUnavailable
+		}
+		writeError(w, code, err.Error())
 		return
 	}
 	s.reqLog(r).Debug("job acked", "job_id", id, "worker", p.ID)
@@ -440,6 +439,9 @@ func (s *Server) result(w http.ResponseWriter, r *http.Request, p auth.Principal
 	if err := s.q.Complete(id, req.LeaseID, p.ID, req.Output, req.Error); err != nil {
 		s.reqLog(r).Info("result refused", "job_id", id, "worker", p.ID, "err", err)
 		code := http.StatusConflict
+		if errors.Is(err, queue.ErrStorage) || errors.Is(err, queue.ErrStorageCapacity) {
+			code = http.StatusServiceUnavailable
+		}
 		if errors.Is(err, queue.ErrResultTooLarge) {
 			code = http.StatusBadRequest
 		}
@@ -478,21 +480,40 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request, p auth.Principal
 		writeError(w, http.StatusBadRequest, `format must be "" or "json"`)
 		return
 	}
-	if !slices.Contains(s.Status().Models, req.Model) {
-		s.reqLog(r).Info("no worker for model", "caller", p.ID, "model", req.Model)
-		writeError(w, http.StatusServiceUnavailable, "no online worker serves "+req.Model)
-		return
-	}
 	if req.NumPredict == 0 {
 		req.NumPredict = protocol.MaxNumPredict
 	}
-	id, err := s.q.Submit(p.ID, req)
+	values, hasKey := r.Header["Idempotency-Key"]
+	key := ""
+	if hasKey {
+		if len(values) != 1 || !saneRequestID.MatchString(values[0]) {
+			writeError(w, http.StatusBadRequest, "invalid idempotency key")
+			return
+		}
+		key = values[0]
+	}
+	id, replayed, err := s.q.Replay(p.ID, key, req)
+	if err == nil && !replayed {
+		if !slices.Contains(s.Status().Models, req.Model) {
+			writeError(w, http.StatusServiceUnavailable, "no online worker serves "+req.Model)
+			return
+		}
+		id, err = s.q.SubmitKey(p.ID, key, req)
+	}
 	if err != nil {
 		code := http.StatusServiceUnavailable
 		if errors.Is(err, queue.ErrCallerCapacity) {
 			code = http.StatusTooManyRequests
 		}
-		w.Header().Set("Retry-After", "1")
+		if errors.Is(err, queue.ErrIdempotencyConflict) {
+			code = http.StatusConflict
+		}
+		if errors.Is(err, queue.ErrIdempotencyKey) {
+			code = http.StatusBadRequest
+		}
+		if code == 503 || code == 429 {
+			w.Header().Set("Retry-After", "1")
+		}
 		writeError(w, code, err.Error())
 		return
 	}
@@ -512,7 +533,11 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, p auth.Principal
 func (s *Server) waitAndWrite(w http.ResponseWriter, r *http.Request, owner, id string, wait time.Duration) {
 	deadline, err := s.q.Deadline(owner, id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		code := http.StatusNotFound
+		if errors.Is(err, queue.ErrStorage) {
+			code = http.StatusServiceUnavailable
+		}
+		writeError(w, code, err.Error())
 		return
 	}
 	if until := time.Until(deadline); wait > until {
@@ -522,7 +547,11 @@ func (s *Server) waitAndWrite(w http.ResponseWriter, r *http.Request, owner, id 
 	defer cancel()
 	st, err := s.q.Wait(ctx, owner, id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		code := http.StatusNotFound
+		if errors.Is(err, queue.ErrStorage) {
+			code = http.StatusServiceUnavailable
+		}
+		writeError(w, code, err.Error())
 		return
 	}
 	code := http.StatusAccepted
@@ -599,3 +628,5 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(v)
 }
+
+func (s *Server) Close() error { return s.q.Close() }

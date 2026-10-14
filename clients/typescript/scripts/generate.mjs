@@ -10,7 +10,7 @@ const ast = await openapiTS(spec);
 const parsed = ts.createSourceFile("contract.ts", astToString(ast), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const printer = ts.createPrinter({ removeComments: true, newLine: ts.NewLineKind.LineFeed });
 const submit = spec.components.schemas.SubmitRequest.properties;
-const output = `${printer.printFile(parsed)}\nexport const limits = ${JSON.stringify({ maxDeadlineMs: submit.deadline_ms.maximum, maxNumPredict: submit.num_predict.maximum, defaultNumPredict: submit.num_predict.default })} as const;\n`;
+const output = `${printer.printFile(parsed)}\nexport const limits = ${JSON.stringify({ maxDeadlineMs: submit.deadline_ms.maximum, maxNumPredict: submit.num_predict.maximum, defaultNumPredict: submit.num_predict.default, maxIdempotencyKeyLength: spec.components.parameters.IdempotencyKey.schema.maxLength, idempotencyKeyPattern: spec.components.parameters.IdempotencyKey.schema.pattern })} as const;\n`;
 const destination = new URL("../src/contract.ts", import.meta.url);
 if (process.argv.includes("--check")) {
   if (await readFile(destination, "utf8") !== output) {

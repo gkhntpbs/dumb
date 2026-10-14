@@ -233,3 +233,39 @@ test("caller queue saturation exposes retry advice without implicit retry or fal
   assert.equal(calls, 1);
   assert.equal(fallbacks, 0);
 });
+
+test("caller owns the idempotency key across ambiguous responses without implicit retries", async () => {
+  const keys = [];
+  const c = client(async (_, init) => {
+    keys.push(init.headers.get("Idempotency-Key"));
+    if (keys.length === 1) throw new TypeError("response lost");
+    return response(202, job("queued"));
+  });
+  await assert.rejects(c.submit(request, { idempotencyKey: "caller.retry:1" }), /response lost/);
+  assert.equal(keys.length, 1);
+  assert.equal((await c.submit(request, { idempotencyKey: "caller.retry:1" })).job_id, "job");
+  assert.deepEqual(keys, ["caller.retry:1", "caller.retry:1"]);
+});
+
+test("execute sends the key only on submission and preserves conflict errors", async () => {
+  const calls = [];
+  const c = client(async (_, init) => {
+    calls.push({ method: init.method, key: init.headers.get("Idempotency-Key") });
+    return calls.length === 1 ? response(202, job("queued")) : response(200, job("done", { output: "ok" }));
+  });
+  assert.equal((await c.execute(request, { idempotencyKey: "execute-key" })).output, "ok");
+  assert.deepEqual(calls, [{ method: "POST", key: "execute-key" }, { method: "GET", key: null }]);
+  let attempts = 0;
+  const conflicting = client(async () => { attempts++; return response(409, { error: "idempotency key conflicts with an existing request" }); });
+  await assert.rejects(conflicting.execute(request, { idempotencyKey: "execute-key" }), error => error instanceof HTTPError && error.status === 409);
+  assert.equal(attempts, 1);
+});
+
+test("invalid idempotency keys fail locally before sending", async () => {
+  let calls = 0;
+  const c = client(async () => { calls++; return response(202, job("queued")); });
+  for (const key of ["", "has space", "!bad", "a".repeat(limits.maxIdempotencyKeyLength + 1)]) {
+    await assert.rejects(c.submit(request, { idempotencyKey: key }), RangeError);
+  }
+  assert.equal(calls, 0);
+});
