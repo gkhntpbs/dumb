@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gkhntpbs/dumb/internal/branding"
 	"github.com/gkhntpbs/dumb/internal/ollama"
 	"github.com/gkhntpbs/dumb/internal/recoverylab"
 )
@@ -57,6 +58,9 @@ func TestRecoverySetupUsesSealedSystemAndStopsOnlyOwnedChild(t *testing.T) {
 			if !strings.Contains(output.String(), "dumb-worker run") {
 				t.Fatal("setup did not explain runtime ownership")
 			}
+			if strings.Contains(output.String(), "|____/") || strings.Contains(output.String(), "'-----'") {
+				t.Fatal("banner printed in non-interactive setup")
+			}
 			snapshot := fixture.Snapshot()
 			if external {
 				if snapshot.Starts+snapshot.Stops+snapshot.Downloads != 0 {
@@ -66,6 +70,11 @@ func TestRecoverySetupUsesSealedSystemAndStopsOnlyOwnedChild(t *testing.T) {
 				if snapshot.Starts != 1 || snapshot.Stops != 1 || snapshot.Downloads != 1 {
 					t.Fatalf("owned setup lifecycle: %+v", snapshot)
 				}
+			}
+			c.terminalColumns = func(io.Writer) int { return 100 }
+			output.Reset()
+			if code := cmdSetup(context.Background(), c, output, log.New(io.Discard, "", 0)); code != exitOK || !strings.HasPrefix(output.String(), strings.TrimRight(branding.Logo, "\n")) {
+				t.Fatalf("interactive setup banner missing: exit=%d", code)
 			}
 		})
 	}

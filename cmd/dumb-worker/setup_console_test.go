@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gkhntpbs/dumb/internal/branding"
 	"github.com/gkhntpbs/dumb/internal/worker"
 )
 
@@ -85,5 +86,38 @@ func TestSetupSpinnerClampsToConsoleWidthAndStopsAfterOperation(t *testing.T) {
 	}
 	if !spinner || display.active {
 		t.Fatal("spinner did not run and stop")
+	}
+}
+
+func TestSetupBannerWidthAndNonInteractive(t *testing.T) {
+	for _, tc := range []struct {
+		columns int
+		want    string
+	}{{80, branding.Logo}, {56, branding.Logo}, {55, branding.LogoCompact}, {30, branding.LogoCompact}} {
+		var out bytes.Buffer
+		setupBanner(&out, tc.columns)
+		if !strings.HasPrefix(out.String(), strings.TrimRight(tc.want, "\n")) {
+			t.Fatalf("columns=%d: wrong logo", tc.columns)
+		}
+	}
+	var out bytes.Buffer
+	setupBanner(&out, 0)
+	if out.Len() != 0 {
+		t.Fatal("banner printed to non-terminal output")
+	}
+	if setupTerminalColumns(&out) != 0 {
+		t.Fatal("buffer treated as terminal")
+	}
+	for _, logo := range []string{branding.Logo, branding.LogoCompact} {
+		for _, line := range strings.Split(logo, "\n") {
+			if len(line) >= setupBannerMinColumns || strings.ContainsAny(line, "\r\t") {
+				t.Fatalf("logo line does not fit the minimum console width: %q", line)
+			}
+			for _, r := range line {
+				if r > 0x7e {
+					t.Fatalf("non-ASCII logo rune %q", r)
+				}
+			}
+		}
 	}
 }

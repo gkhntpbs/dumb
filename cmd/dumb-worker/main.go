@@ -91,6 +91,7 @@ type config struct {
 	ollamaDataDir                        string
 	ollamaModelsDir                      string
 	newSystem                            func(*ollama.Client) *ollama.System
+	terminalColumns                      func(io.Writer) int
 }
 
 func (c *config) ollamaSystem(client *ollama.Client) *ollama.System {
@@ -330,6 +331,11 @@ func cmdSetup(ctx context.Context, c *config, stdout io.Writer, logger *log.Logg
 		logger.Print(err)
 		return exitError
 	}
+	columns := setupTerminalColumns
+	if c.terminalColumns != nil {
+		columns = c.terminalColumns
+	}
+	setupBanner(stdout, columns(stdout))
 	system := ollama.NewSystem(oc)
 	if c.newSystem != nil {
 		system = c.newSystem(oc)

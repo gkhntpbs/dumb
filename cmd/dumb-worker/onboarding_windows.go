@@ -128,6 +128,7 @@ func desktopSetup(ctx context.Context, root string) int {
 	defer output.Close()
 	read := func(label string, secret bool) (string, error) { return setupNativeRead(input, output, label, secret) }
 	display := &setupDisplay{output: output, columns: func() int { return setupConsoleColumns(output) }}
+	setupBanner(output, display.width())
 	display.note("DUMB WORKER - FIRST-RUN SETUP")
 	display.note("Seven steps connect this computer and prepare a tray worker.")
 	display.note("Paste with Ctrl+V or right-click; press Enter to confirm each field.")

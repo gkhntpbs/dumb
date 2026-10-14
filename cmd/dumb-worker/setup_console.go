@@ -4,10 +4,47 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gkhntpbs/dumb/internal/branding"
 )
+
+// setupBannerMinColumns is the narrowest console that gets the full logo.
+const setupBannerMinColumns = 56
+
+// setupBanner prints the DUMB bear for an interactive setup. columns <= 0
+// means the output is not a terminal (pipe, file, log), so nothing is printed.
+func setupBanner(w io.Writer, columns int) {
+	if columns <= 0 {
+		return
+	}
+	logo := branding.LogoCompact
+	if columns >= setupBannerMinColumns {
+		logo = branding.Logo
+	}
+	fmt.Fprintln(w, strings.TrimRight(logo, "\n"))
+	fmt.Fprintln(w)
+}
+
+// setupTerminalColumns reports the width of w when it is a terminal, or 0.
+func setupTerminalColumns(w io.Writer) int {
+	f, ok := w.(*os.File)
+	if !ok {
+		return 0
+	}
+	info, err := f.Stat()
+	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return 0
+	}
+	if n, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && n > 0 {
+		return n
+	}
+	return 80
+}
 
 var errSetupExit = errors.New("setup closed by user")
 
