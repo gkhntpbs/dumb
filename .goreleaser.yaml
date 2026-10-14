@@ -1,6 +1,6 @@
 # Release build for DUMB (Distributed User-owned Model Backend).
 # Cut a release by pushing a vX.Y.Z (or vX.Y.Z-beta.N) tag; see docs/release.md.
-# Local dry run: go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean --skip=publish
+# Local dry run: go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --snapshot --clean --skip=publish
 version: 2
 project_name: dumb
 
@@ -42,6 +42,8 @@ archives:
   # The worker's self-updater looks for exactly this name (internal/update.ArchiveName).
   - id: dumb-worker
     ids: [dumb-worker, dumb-tray]
+    # Windows includes its optional compatibility tray; other platforms do not.
+    allow_different_binary_count: true
     name_template: "dumb-worker_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     format_overrides:

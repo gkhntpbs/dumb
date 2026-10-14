@@ -53,12 +53,14 @@ func setupClipboardText() (string, error) {
 		return "", errors.New("Clipboard text could not be read; try again")
 	}
 	defer consoleKernel.NewProc("GlobalUnlock").Call(handle)
-	text := windows.UTF16ToString(unsafe.Slice((*uint16)(unsafe.Pointer(pointer)), size/2))
-	text = strings.TrimSpace(text)
-	if strings.ContainsAny(text, "\r\n\x00") {
-		return "", errors.New("Paste one line only")
+	// GlobalLock returns a native address. Copy through the typed API while
+	// locked, avoiding a uintptr-to-Go-pointer conversion rejected by vet.
+	data := make([]byte, int(size))
+	var copied uintptr
+	if err := windows.ReadProcessMemory(windows.CurrentProcess(), pointer, &data[0], size, &copied); err != nil || copied != size {
+		return "", errors.New("Clipboard text could not be copied; try again")
 	}
-	return text, nil
+	return decodeSetupClipboard(data)
 }
 
 func setupNativeRead(input *os.File, output io.Writer, label string, secret bool) (string, error) {

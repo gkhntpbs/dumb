@@ -26,6 +26,16 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.0.0
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - name: Locked caller tooling
+        run: |
+          npm install --global npm@11.12.1
+          npm ci --prefix clients/typescript --ignore-scripts
+
       - name: Build gate
         run: ./qa-automation/scripts/build-gate.sh
 
@@ -40,7 +50,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: "v2.18.3"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

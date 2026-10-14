@@ -2,11 +2,13 @@
 
 ## Cutting a release
 
-1. Make sure the gate is green: `./qa-automation/scripts/build-gate.sh`.
+1. Review the public source/history boundary and run
+   `GITLEAKS_BIN=/path/to/gitleaks ./qa-automation/scripts/public-source-audit.sh`
+   with verified Gitleaks 8.30.0 after the gate. Make sure the gate is green: `./qa-automation/scripts/build-gate.sh`.
 2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0` (a pre-release is
    `v0.2.0-beta.1`). Only on an explicit decision; nothing pushes automatically.
 3. `.github/workflows/release.yaml` then runs the gate again, builds with
-   goreleaser (`.goreleaser.yaml`) into a **draft** release, signs
+   GoReleaser 2.18.3 (`.goreleaser.yaml`) into a **draft** release, signs
    `checksums.txt` with minisign, checks that signature against the public key,
    uploads `checksums.txt.minisig` and only then publishes the release.
    goreleaser marks tags with a pre-release suffix as GitHub pre-releases.
@@ -28,7 +30,7 @@ The key pair is generated and kept by the private `ops` repository. Without
 `MINISIGN_PUBLIC_KEY` the workflow stops; a worker built without a key logs
 `no release key embedded; self-update disabled` and never updates.
 
-Local dry run (no publish): `go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean --skip=publish`
+Local dry run (no publish): `go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --snapshot --clean --skip=publish`
 (output in the git-ignored `dist/`). Local end-to-end update test without
 GitHub: `./qa-automation/scripts/update-e2e.sh`.
 
@@ -105,3 +107,9 @@ publishing. Its native helper is not part of the current GoReleaser CLI
 archives and is never overwritten by the signed Go binary updater. Signed
 helper distribution, notarization and tagged native application packaging
 remain pending. See [macos-menu-bar.md](macos-menu-bar.md).
+
+Local prerelease packaging evidence and remaining platform limitations are in
+[release-preflight-2026-10-15.md](qa/release-preflight-2026-10-15.md). The snapshot
+archive verifier is `qa-automation/scripts/check-release-archives.py DIST PUBLIC_KEY`.
+It checks packaging and embedded public metadata; real signature/update/rollback
+acceptance must use the published release assets.
