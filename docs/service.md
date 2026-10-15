@@ -99,9 +99,9 @@ Hardening in the unit, and why each one leaves the worker working:
 | `ProtectKernel*`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `RestrictNamespaces`, `RestrictSUIDSGID`, `RestrictRealtime`, `LockPersonality`, `MemoryDenyWriteExecute`, `SystemCallArchitectures=native` | standard sandboxing; a static Go binary needs none of what they block |
 | `UMask=0077` | files the worker writes are private to `dumb` |
 
-Not verified on a real Linux host yet (`systemd-analyze security` and a real
-self-update under the unit); the generated unit is covered by
-`TestSystemdSystemUnitHardening`.
+On a real Raspberry Pi (Debian 13) `systemd-analyze security` rates the installed unit 3.1 "OK"
+(`docs/qa/pi-system-install-2026-10-15.md`). A real self-update under the unit is not verified yet;
+the generated unit is covered by `TestSystemdSystemUnitHardening`.
 
 ## Models
 
