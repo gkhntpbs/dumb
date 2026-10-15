@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Distributed User-owned Model Backend</strong><br>
-  Run AI requests on machines you own. Fall back to the cloud when none of them are online.
+  Run AI requests on machines you own, wherever they are.
 </p>
 
 <p align="center">
@@ -79,8 +79,22 @@ DUMB turns them into one backend:
 - **Your application sends a job to one server**, the way it would call any API.
 - **Your machines pull work** over outbound HTTPS. Nothing listens for inbound
   connections, so a worker behind any NAT just works.
-- **When no worker answers in time**, your application takes its own cloud path. The
-  request still gets answered; it just costs what it used to.
+- **When no worker can take the job**, DUMB says so right away (`503`), or the wait
+  runs out without a result. What happens next is up to your application.
+
+DUMB does not call any cloud AI provider itself. A pattern that works well, and the one
+DUMB was built around, is to keep your existing cloud provider as a fallback in your own
+code:
+
+```text
+send the job to DUMB with a short wait (e.g. ?wait=1500ms)
+  200 → use the result from your own machine
+  503 → call your cloud provider as before
+  202 (no result in time) → cancel the DUMB job, then call your cloud provider
+```
+
+That way a request still gets answered when every machine is off; it just costs what it
+used to.
 
 The name is honest about the scope. DUMB is a deliberately simple job queue, not an
 orchestrator: no scheduling magic, no shared GPU memory, no model sharding. One request,
@@ -89,22 +103,20 @@ one machine, one local model.
 ## How it works
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant App as Your application
-    participant S as dumb-server
-    participant W as dumb-worker
-    participant O as Ollama (127.0.0.1)
+flowchart LR
+    App["Your app"]
+    Server["DUMB server<br/>(the job list)"]
+    Worker["Your machine<br/>worker + Ollama"]
 
-    W->>S: long-poll GET /v1/jobs/next (outbound HTTPS)
-    App->>S: POST /v1/jobs?wait=1500ms
-    S-->>W: lease the job to a worker that has the model
-    W->>S: ack
-    W->>O: generate
-    O-->>W: result
-    W->>S: POST /v1/jobs/{id}/result
-    S-->>App: result (or a timeout: take the cloud path)
+    App -->|"1. sends a job"| Server
+    Worker -->|"2. asks: any work?"| Server
+    Server -.->|"3. reply: here is a job"| Worker
+    Worker -->|"4. sends back the answer"| Server
+    Server -.->|"5. reply: the answer"| App
 ```
+
+Solid arrows start the connection, dotted arrows are replies on it. Your machine only ever
+connects **out** to the server; nothing connects in.
 
 - **Pull, not push.** Workers hold a long-poll open to the server. No open ports, no
   tunnels, no VPN.
