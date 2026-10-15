@@ -54,9 +54,11 @@ info:
 
 
     **Rate limits.** Every principal (worker or caller) has its own token bucket,
-    and requests that fail authentication are limited per client IP; once a client
-    IP's bucket is empty, its requests are refused before their credential is
-    checked. Exceeding a limit returns `429` with `Retry-After` (seconds). The
+    and requests that fail authentication are limited per client IP. The
+    credential is always checked first: a valid credential is never refused
+    because other clients behind the same IP failed; once a client IP's failure
+    bucket is empty, its further failed requests get `429` instead of `401`.
+    Exceeding a limit returns `429` with `Retry-After` (seconds). The
     defaults are well above normal long-polling.
 
 

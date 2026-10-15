@@ -154,10 +154,23 @@ func TestUnauthenticatedLimitedPerIP(t *testing.T) {
 			t.Fatalf("guess %d: %d", i, res.StatusCode)
 		}
 	}
-	// Now even a right token from that IP is refused before it is checked.
-	res, _ := e.do("GET", "/v1/status", callerToken, "", nil)
+	// Further wrong tokens from that IP are refused with 429.
+	res, _ := e.do("GET", "/v1/status", "guess-x", "", nil)
 	if res.StatusCode != http.StatusTooManyRequests || res.Header.Get("Retry-After") != "10" {
 		t.Fatalf("after 3 failures: %d Retry-After=%q", res.StatusCode, res.Header.Get("Retry-After"))
+	}
+	// Valid callers and workers sharing the IP are never blocked by others' failures.
+	for i := range 5 {
+		if res, _ := e.do("GET", "/v1/status", callerToken, "", nil); res.StatusCode != http.StatusOK {
+			t.Fatalf("valid caller %d after shared-IP failures: %d", i, res.StatusCode)
+		}
+		if res, _ := e.do("POST", "/v1/workers/hello", workerToken, "1.2.0", protocol.HelloRequest{WorkerVersion: "1.2.0", ProtocolVersion: protocol.Version, Models: []string{model}, Capacity: 1}); res.StatusCode/100 != 2 {
+			t.Fatalf("valid worker %d after shared-IP failures: %d", i, res.StatusCode)
+		}
+		// Successes do not refill the failure bucket.
+		if res, _ := e.do("GET", "/v1/status", "guess-y", "", nil); res.StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("wrong token %d after valid traffic: %d", i, res.StatusCode)
+		}
 	}
 	// X-Forwarded-For is ignored without a trusted proxy: a forged header does not get a fresh bucket.
 	req, _ := http.NewRequest("GET", e.ts.URL+"/v1/status", nil)
@@ -214,5 +227,20 @@ func TestLimiterSweepsFullBuckets(t *testing.T) {
 	}
 	if ok, _ := (newLimiter(Rate{PerSecond: -1}, time.Now)).allow("k"); !ok {
 		t.Fatal("negative rate must disable the limit")
+	}
+}
+
+func TestUnauthenticatedLimiterBoundedMemory(t *testing.T) {
+	l := newLimiter(Rate{PerSecond: 0.1, Burst: 3}, time.Now)
+	l.maxKeys = 4
+	for i := range 10 {
+		l.allow("192.0.2." + strconv.Itoa(i))
+	}
+	if n := len(l.b); n > 4 {
+		t.Fatalf("failure limiter grew to %d keys, cap 4", n)
+	}
+	e := newEnvWith(t, func(c *Config) {})
+	if e.srv.unauthLim.maxKeys <= 0 {
+		t.Fatal("failed-auth limiter has no key cap")
 	}
 }

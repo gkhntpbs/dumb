@@ -47,11 +47,22 @@ type limiter struct {
 	mu      sync.Mutex
 	b       map[string]*bucket
 	swept   time.Time
-	maxKeys int // optional cap; used for unauthenticated pairing attempts only
+	maxKeys int // optional cap for limiters keyed by unauthenticated client IPs
 }
 
 func newLimiter(r Rate, now func() time.Time) *limiter {
 	return &limiter{rate: r, now: now, b: map[string]*bucket{}}
+}
+
+// MaxFailedAuthIPs caps how many client IPs the failed-authentication limiter
+// tracks at once; when full, failures from a new IP are refused with 429.
+// Valid credentials never touch this limiter.
+const MaxFailedAuthIPs = 65536
+
+func newCappedLimiter(r Rate, now func() time.Time, maxKeys int) *limiter {
+	l := newLimiter(r, now)
+	l.maxKeys = maxKeys
+	return l
 }
 
 // refill brings key's bucket up to date and returns it (nil when off).

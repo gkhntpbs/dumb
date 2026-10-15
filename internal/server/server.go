@@ -122,7 +122,7 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{epoch: cfg.Now().UTC(), cfg: cfg, min: min, q: q, mux: http.NewServeMux(), workers: map[string]*worker{}, log: cfg.Logger,
 		workerLim:  newLimiter(cfg.WorkerRate, time.Now),
 		callerLim:  newLimiter(cfg.CallerRate, time.Now),
-		unauthLim:  newLimiter(cfg.UnauthRate, time.Now),
+		unauthLim:  newCappedLimiter(cfg.UnauthRate, time.Now, MaxFailedAuthIPs),
 		pairingLim: newLimiter(cfg.PairingRate.orDefault(DefaultUnauthRate), time.Now),
 	}
 
@@ -219,19 +219,22 @@ type handler func(w http.ResponseWriter, r *http.Request, p auth.Principal)
 
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, role auth.Role) (auth.Principal, bool) {
 	ip := clientIP(r, s.cfg.TrustedProxies)
-	// An IP that keeps failing is refused before its token is even looked at,
-	// so guessing costs the attacker a 429 per try, not a 401.
-	if blocked, after := s.unauthLim.blocked(ip); blocked {
-		s.tooMany(w, r, after, "client_ip", ip, "reason", "failed authentication")
-		return auth.Principal{}, false
-	}
+	// The credential is checked first, so a valid principal is never refused
+	// because others behind the same IP (NAT, shared egress) keep failing.
+	// Only failures spend the per-IP bucket; once it is empty, further
+	// failures get 429 instead of 401. Tokens are looked up by their SHA-256
+	// hash, so lookup timing reveals nothing about a stored token, and
+	// guessing one is bounded by its entropy, not by this limit.
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	p, err := s.cfg.Auth.Authenticate(token)
 	if !ok || err != nil || p.Role != role || p.ID == "" {
-		s.unauthLim.allow(ip)
+		if allowed, after := s.unauthLim.allow(ip); !allowed {
+			s.tooMany(w, r, after, "client_ip", ip, "reason", "failed authentication")
+			return auth.Principal{}, false
+		}
 		s.reqLog(r).Warn("unauthorized", "path", r.URL.Path, "client_ip", ip, "role", string(role))
 		writeJSON(w, http.StatusUnauthorized, protocol.Error{Error: "unauthorized"})
-		return p, false
+		return auth.Principal{}, false
 	}
 	lim := s.workerLim
 	if role == auth.RoleCaller {
