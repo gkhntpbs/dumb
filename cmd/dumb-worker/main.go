@@ -6,6 +6,7 @@
 //	dumb-worker [run]                         serve jobs (default)
 //	dumb-worker doctor                        check this machine and the configuration
 //	dumb-worker setup                         install/start Ollama and pull the models
+//	dumb-worker install -server URL -models M  Linux: one-command non-interactive install (see docs/linux-install.md)
 //	dumb-worker service install|uninstall|print
 //	dumb-worker version
 //
@@ -84,6 +85,7 @@ type config struct {
 	server, tokenFile, models, ollamaURL string
 	channel, updateURL                   string
 	logDir                               string // service: macOS log directory
+	serviceName                          string // service: launchd label / systemd unit / Windows service name
 	capacity                             int
 	system                               bool // service: Linux system unit
 	headless                             bool
@@ -144,6 +146,7 @@ func parseFlags(name string, args []string, stderr io.Writer) (*config, []string
 	if name == "service" {
 		fs.BoolVar(&c.system, "system", false, "Linux: install a system unit instead of a user unit")
 		fs.StringVar(&c.logDir, "log-dir", "", "macOS: directory for dumb-worker.log (default ~/Library/Logs)")
+		fs.StringVar(&c.serviceName, "service-name", service.DefaultLabel, "service name (launchd label, systemd unit, Windows service)")
 	}
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, err
@@ -178,6 +181,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "dumb-worker %s (protocol v%d)\n", version, protocol.Version)
 		return exitOK
 	}
+	if cmd == "install" {
+		return cmdInstall(ctx, args, stdout, stderr, logger)
+	}
 	if cmd == "pair" {
 		c, err := parsePairFlags(args)
 		if err != nil {
@@ -208,7 +214,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "service":
 		return cmdService(ctx, c, sub, stdout, logger)
 	}
-	fmt.Fprintf(stderr, "dumb-worker: unknown command %q (run, doctor, setup, pair, service, version)\n", cmd)
+	fmt.Fprintf(stderr, "dumb-worker: unknown command %q (run, doctor, setup, install, pair, service, version)\n", cmd)
 	return exitUsage
 }
 
@@ -335,8 +341,7 @@ func cmdDoctor(ctx context.Context, c *config, stdout io.Writer) int {
 }
 
 func cmdSetup(ctx context.Context, c *config, stdout io.Writer, logger *log.Logger) int {
-	oc, err := ollama.New(c.ollamaURL)
-	if err != nil {
+	if _, err := ollama.New(c.ollamaURL); err != nil {
 		logger.Print(err)
 		return exitError
 	}
@@ -345,14 +350,27 @@ func cmdSetup(ctx context.Context, c *config, stdout io.Writer, logger *log.Logg
 		columns = c.terminalColumns
 	}
 	setupBanner(stdout, columns(stdout))
+	if err := runSetup(ctx, c, logger); err != nil {
+		logger.Print(err)
+		return exitError
+	}
+	fmt.Fprintln(stdout, "Setup complete. Next: dumb-worker run")
+	return exitOK
+}
+
+// runSetup brings Ollama to readiness for the configured models (bounded).
+func runSetup(ctx context.Context, c *config, logger *log.Logger) error {
+	oc, err := ollama.New(c.ollamaURL)
+	if err != nil {
+		return err
+	}
 	system := ollama.NewSystem(oc)
 	if c.newSystem != nil {
 		system = c.newSystem(oc)
 	}
 	recovery, err := ollama.NewRecovery(ollama.RecoveryConfig{System: system, Models: c.modelList(), External: c.ollamaConfigured, Logger: logger})
 	if err != nil {
-		logger.Print(err)
-		return exitError
+		return err
 	}
 	defer func() {
 		stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -361,12 +379,7 @@ func cmdSetup(ctx context.Context, c *config, stdout io.Writer, logger *log.Logg
 			logger.Print(err)
 		}
 	}()
-	if err := recovery.Ensure(ctx); err != nil {
-		logger.Print(err)
-		return exitError
-	}
-	fmt.Fprintln(stdout, "Setup complete. Next: dumb-worker run")
-	return exitOK
+	return recovery.Ensure(ctx)
 }
 
 func cmdService(ctx context.Context, c *config, sub string, stdout io.Writer, logger *log.Logger) int {
@@ -405,7 +418,7 @@ func cmdService(ctx context.Context, c *config, sub string, stdout io.Writer, lo
 	}
 	home, _ := os.UserHomeDir()
 	sc := service.Config{
-		GOOS: runtime.GOOS, Binary: bin, Env: envs, Home: home, UID: os.Getuid(),
+		GOOS: runtime.GOOS, Label: c.serviceName, Binary: bin, Env: envs, Home: home, UID: os.Getuid(),
 		System: c.system, LogDir: c.logDir, Runner: ollama.ExecRunner{},
 	}
 	switch sub {

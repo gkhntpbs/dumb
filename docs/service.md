@@ -12,6 +12,9 @@ anything.
 | Windows | `sc.exe` service | LocalSystem (native SCM handling; see `windows-worker.md`) |
 
 On macOS, `-log-dir` moves `dumb-worker.log` out of `~/Library/Logs`.
+`-service-name` changes the unit/agent/service name (default `dumb-worker`).
+On Linux, `dumb-worker install` (see `linux-install.md`) does binary, credential,
+setup and unit in one idempotent step.
 
 ## macOS launchd user agent
 
