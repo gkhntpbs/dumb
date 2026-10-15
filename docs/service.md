@@ -16,6 +16,12 @@ On macOS, `-log-dir` moves `dumb-worker.log` out of `~/Library/Logs`.
 On Linux, `dumb-worker install` (see `linux-install.md`) does binary, credential,
 setup and unit in one idempotent step.
 
+`-name` (env `DUMB_WORKER_NAME`) sets the display name shown in the admin panel
+instead of the hostname. It is written into the definition only when given
+(`DUMB_WORKER_NAME` in the plist and unit, `-name` in the Windows `binPath`), so
+a service installed without it keeps following the machine's hostname. The
+name is display only: the server identifies a worker by its credential.
+
 ## macOS launchd user agent
 
 Verified on a real Mac (Apple M4, macOS 27.0.1) on 2026-10-12 with

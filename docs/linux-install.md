@@ -31,6 +31,7 @@ sudo dumb-worker install -system -server https://dumb.example -models qwen3:0.6b
 | Flag | Meaning |
 |---|---|
 | `-server`, `-models`, `-capacity`, `-ollama`, `-channel`, `-update-url` | As for `run` (same `DUMB_*` environment defaults) |
+| `-name NAME` | Display name in the admin panel (env `DUMB_WORKER_NAME`, at most 64 characters, no control characters). Written into the unit only when given; otherwise the worker sends its hostname. Display only, never an identity |
 | `-user` / `-system` | User unit for the current account (default; refused as root) / system unit as `User=dumb` (needs root; the account is created with `useradd --system` when missing) |
 | `-dir DIR` | User install directory (default `~/.local/share/dumb-worker`) |
 | `-service-name NAME` | Unit name (default `dumb-worker`); `service uninstall -service-name NAME` removes it |

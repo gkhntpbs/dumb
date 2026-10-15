@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ type desktopConfig struct {
 	OllamaDataDir   string `json:"ollama_data_dir,omitempty"`
 	OllamaModelsDir string `json:"ollama_models_dir,omitempty"`
 	OllamaURL       string `json:"ollama_url,omitempty"`
+	Name            string `json:"name,omitempty"` // display only; absent = follow the hostname
 }
 
 func loadDesktopConfig(root string) (*config, error) {
@@ -50,6 +52,12 @@ func loadDesktopConfig(root string) (*config, error) {
 			c.ollamaConfigured = true
 		}
 	}
+	if c.name == "" && saved.Name != "" { // an explicit launch name wins, like DUMB_OLLAMA
+		c.name = saved.Name
+		if err := c.checkName(); err != nil {
+			return nil, errors.New("saved worker name is invalid")
+		}
+	}
 	c.ollamaDataDir = saved.OllamaDataDir
 	c.ollamaModelsDir = saved.OllamaModelsDir
 	c.server = saved.Server
@@ -66,6 +74,13 @@ func loadDesktopConfig(root string) (*config, error) {
 
 func desktopSetupConfig(server, models string) (desktopConfig, error) {
 	saved := desktopConfig{Server: server, Models: models, OllamaDataDir: os.Getenv("DUMB_OLLAMA_DATA_DIR"), OllamaModelsDir: os.Getenv("OLLAMA_MODELS"), OllamaURL: os.Getenv("DUMB_OLLAMA")}
+	if name := os.Getenv("DUMB_WORKER_NAME"); name != "" {
+		c := &config{name: name}
+		if err := c.checkName(); err != nil {
+			return desktopConfig{}, fmt.Errorf("DUMB_WORKER_NAME: %w", err)
+		}
+		saved.Name = c.name
+	}
 	if saved.OllamaDataDir != "" && !filepath.IsAbs(saved.OllamaDataDir) {
 		return desktopConfig{}, errors.New("Ollama data directory must be absolute")
 	}

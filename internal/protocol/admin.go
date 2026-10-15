@@ -25,6 +25,7 @@ type AdminSummary struct {
 
 type AdminWorker struct {
 	WorkerID      string    `json:"worker_id"`
+	WorkerName    string    `json:"worker_name,omitempty"`
 	WorkerVersion string    `json:"worker_version"`
 	Models        []string  `json:"models"`
 	Capacity      int       `json:"capacity"`

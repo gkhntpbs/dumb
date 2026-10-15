@@ -408,6 +408,7 @@ export interface components {
         };
         HelloRequest: {
             worker_version: string;
+            worker_name?: string;
             protocol_version: number;
             models: string[];
             capacity: number;
@@ -534,6 +535,7 @@ export interface components {
         };
         AdminWorker: {
             worker_id: string;
+            worker_name?: string;
             worker_version: string;
             models: string[];
             capacity: number;

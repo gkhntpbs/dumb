@@ -54,7 +54,10 @@ go test ./internal/service ./internal/menubar ./internal/worker ./internal/updat
 ```
 
 Configure `DUMB_SERVER`, `DUMB_TOKEN_FILE` and `DUMB_MODELS` in the launching
-process, or pass their equivalent flags. Restrict the token ACL to the current
+process, or pass their equivalent flags. The admin panel shows the computer
+name unless `DUMB_WORKER_NAME` / `-name` is set; desktop onboarding saves a
+`DUMB_WORKER_NAME` present at setup into `config.json` (a launch-time value
+still wins). Restrict the token ACL to the current
 user, SYSTEM and Administrators. For explicit GUI `run` launches, redirect stderr to a local
 file; only onboarding opens the setup terminal. Use an explicitly selected loopback
 Ollama endpoint during development so recovery cannot install or start the

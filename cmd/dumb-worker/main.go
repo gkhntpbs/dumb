@@ -16,6 +16,7 @@
 //	-token-file  DUMB_TOKEN_FILE  file holding this worker's token (mode 0600)
 //	-models      DUMB_MODELS      comma-separated Ollama models to serve
 //	-capacity    DUMB_CAPACITY    jobs run at the same time (default 1)
+//	-name        DUMB_WORKER_NAME display name in the admin panel (default: hostname; display only)
 //	-ollama      DUMB_OLLAMA      Ollama URL (default http://127.0.0.1:11434; loopback only)
 //	-ollama-remote DUMB_OLLAMA_REMOTE=1  allow an Ollama on a private-network host (never managed)
 //	-channel     DUMB_CHANNEL     update channel: stable (default) or beta
@@ -43,6 +44,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gkhntpbs/dumb/internal/doctor"
 	"github.com/gkhntpbs/dumb/internal/ollama"
@@ -84,6 +86,7 @@ func main() {
 
 type config struct {
 	server, tokenFile, models, ollamaURL string
+	name                                 string // display only; "" = the hostname, chosen at run time
 	channel, updateURL                   string
 	logDir                               string // service: macOS log directory
 	serviceName                          string // service: launchd label / systemd unit / Windows service name
@@ -142,6 +145,7 @@ func parseFlags(name string, args []string, stderr io.Writer) (*config, []string
 	fs.StringVar(&c.tokenFile, "token-file", os.Getenv("DUMB_TOKEN_FILE"), "token file, mode 0600 (env DUMB_TOKEN_FILE)")
 	fs.StringVar(&c.models, "models", os.Getenv("DUMB_MODELS"), "comma-separated models (env DUMB_MODELS)")
 	fs.IntVar(&c.capacity, "capacity", capDefault, "concurrent jobs (env DUMB_CAPACITY)")
+	fs.StringVar(&c.name, "name", os.Getenv("DUMB_WORKER_NAME"), nameUsage)
 	fs.StringVar(&c.ollamaURL, "ollama", env("DUMB_OLLAMA", ollama.DefaultURL), "Ollama URL, loopback only unless -ollama-remote (env DUMB_OLLAMA)")
 	fs.BoolVar(&c.ollamaRemote, "ollama-remote", os.Getenv("DUMB_OLLAMA_REMOTE") == "1", "use an Ollama on a private-network host (10/8, 172.16/12, 192.168/16, fc00::/7); it is never installed, started or pulled to (env DUMB_OLLAMA_REMOTE=1)")
 	fs.StringVar(&c.channel, "channel", env("DUMB_CHANNEL", update.ChannelStable), "update channel: stable or beta (env DUMB_CHANNEL)")
@@ -162,7 +166,29 @@ func parseFlags(name string, args []string, stderr io.Writer) (*config, []string
 	if c.channel != update.ChannelStable && c.channel != update.ChannelBeta {
 		return nil, nil, fmt.Errorf("channel %q: want stable or beta", c.channel)
 	}
+	if err := c.checkName(); err != nil {
+		return nil, nil, err
+	}
 	return c, fs.Args(), nil
+}
+
+const nameUsage = "display name shown in the admin panel, at most 64 characters (default: this machine's hostname; display only, never an identity) (env DUMB_WORKER_NAME)"
+
+// checkName normalizes an explicitly given display name and refuses one the
+// server would drop or cut, so a mistake is reported here, not hidden there.
+func (c *config) checkName() error {
+	if c.name == "" {
+		return nil
+	}
+	n := protocol.NormalizeWorkerName(c.name)
+	switch {
+	case n == "":
+		return errors.New("name: must not be blank or contain control characters")
+	case utf8.RuneCountInString(strings.TrimSpace(c.name)) > protocol.MaxWorkerNameRunes:
+		return fmt.Errorf("name: at most %d characters", protocol.MaxWorkerNameRunes)
+	}
+	c.name = n
+	return nil
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -246,7 +272,7 @@ func cmdRun(ctx context.Context, c *config, logger *log.Logger) int {
 		}
 	}()
 	wcfg := worker.Config{
-		ServerURL: c.server, Token: token, Models: c.modelList(), Capacity: c.capacity,
+		ServerURL: c.server, Token: token, Models: c.modelList(), Capacity: c.capacity, Name: c.name,
 		OllamaURL: c.ollamaURL, Version: version, Logger: logger,
 		Ollama: system.Client, Recovery: recovery, ModelCheck: 5 * time.Second,
 	}
@@ -410,6 +436,7 @@ func cmdService(ctx context.Context, c *config, sub string, stdout io.Writer, lo
 		}
 	}
 	c.addOllamaEnvironment(envs)
+	c.addNameEnvironment(envs)
 	if c.headless {
 		envs["DUMB_HEADLESS"] = "1"
 	}
@@ -462,6 +489,14 @@ func cmdService(ctx context.Context, c *config, sub string, stdout io.Writer, lo
 	}
 	logger.Printf("unknown service command %q (install, uninstall, print)", sub)
 	return exitUsage
+}
+
+// addNameEnvironment persists only an explicitly given name; without one the
+// service keeps following the machine's hostname.
+func (c *config) addNameEnvironment(envs map[string]string) {
+	if c.name != "" {
+		envs["DUMB_WORKER_NAME"] = c.name
+	}
 }
 
 func (c *config) addOllamaEnvironment(envs map[string]string) {

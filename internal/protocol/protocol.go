@@ -41,7 +41,11 @@ type UpgradeError struct {
 }
 
 type HelloRequest struct {
-	WorkerVersion   string   `json:"worker_version"`
+	WorkerVersion string `json:"worker_version"`
+	// WorkerName is a display-only label (see NormalizeWorkerName). Absent in
+	// older workers; older servers ignore it because hello tolerates unknown
+	// fields.
+	WorkerName      string   `json:"worker_name,omitempty"`
 	ProtocolVersion int      `json:"protocol_version"`
 	Models          []string `json:"models"`
 	Capacity        int      `json:"capacity"`

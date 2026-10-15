@@ -64,6 +64,7 @@ type Config struct {
 
 type worker struct {
 	version  string
+	name     string // display only (protocol.NormalizeWorkerName); never identity
 	models   []string
 	capacity int
 	lastSeen time.Time
@@ -327,9 +328,11 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request, p auth.Principal)
 	}
 	wk.models, wk.capacity, wk.lastSeen = slices.Clone(req.Models), req.Capacity, s.cfg.Now()
 	wk.version = req.WorkerVersion
+	wk.name = protocol.NormalizeWorkerName(req.WorkerName)
+	name := wk.name
 	wk.ack = slices.Contains(req.Features, protocol.FeatureAck)
 	s.mu.Unlock()
-	s.reqLog(r).Info("worker hello", "worker", p.ID, "worker_version", req.WorkerVersion, "models", req.Models,
+	s.reqLog(r).Info("worker hello", "worker", p.ID, "worker_name", name, "worker_version", req.WorkerVersion, "models", req.Models,
 		"capacity", req.Capacity, "features", req.Features)
 	writeJSON(w, http.StatusOK, protocol.HelloResponse{
 		WorkerID:                 p.ID,

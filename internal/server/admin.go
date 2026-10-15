@@ -293,7 +293,7 @@ func (s *Server) adminWorkers(model, state string) []protocol.AdminWorker {
 		if online {
 			free = max(0, wk.capacity-leases[id])
 		}
-		rows = append(rows, protocol.AdminWorker{WorkerID: boundedText(id, 128), WorkerVersion: boundedText(wk.version, 64), Models: models, Capacity: wk.capacity, LiveLeases: leases[id], FreeSlots: free, LastSeen: wk.lastSeen, State: status})
+		rows = append(rows, protocol.AdminWorker{WorkerID: boundedText(id, 128), WorkerName: boundedText(wk.name, protocol.MaxWorkerNameRunes), WorkerVersion: boundedText(wk.version, 64), Models: models, Capacity: wk.capacity, LiveLeases: leases[id], FreeSlots: free, LastSeen: wk.lastSeen, State: status})
 	}
 	slices.SortFunc(rows, func(a, b protocol.AdminWorker) int { return strings.Compare(a.WorkerID, b.WorkerID) })
 	return rows

@@ -89,6 +89,7 @@ func parseInstallFlags(args []string, stderr io.Writer) (*installOptions, error)
 	fs.StringVar(&c.server, "server", os.Getenv("DUMB_SERVER"), "server URL (env DUMB_SERVER)")
 	fs.StringVar(&c.models, "models", os.Getenv("DUMB_MODELS"), "comma-separated models (env DUMB_MODELS)")
 	fs.IntVar(&c.capacity, "capacity", capDefault, "concurrent jobs (env DUMB_CAPACITY)")
+	fs.StringVar(&c.name, "name", os.Getenv("DUMB_WORKER_NAME"), nameUsage)
 	fs.StringVar(&c.ollamaURL, "ollama", env("DUMB_OLLAMA", ollama.DefaultURL), "Ollama URL (env DUMB_OLLAMA)")
 	fs.BoolVar(&c.ollamaRemote, "ollama-remote", os.Getenv("DUMB_OLLAMA_REMOTE") == "1", "use an Ollama on a private-network host; never managed (env DUMB_OLLAMA_REMOTE=1)")
 	fs.StringVar(&c.channel, "channel", env("DUMB_CHANNEL", update.ChannelStable), "update channel: stable or beta (env DUMB_CHANNEL)")
@@ -113,6 +114,9 @@ func parseInstallFlags(args []string, stderr io.Writer) (*installOptions, error)
 			c.ollamaConfigured = true
 		}
 	})
+	if err := c.checkName(); err != nil {
+		return nil, err
+	}
 	o.cfg = c
 	return o, nil
 }
@@ -360,6 +364,7 @@ func installEnv(c *config, token string) map[string]string {
 	envs := map[string]string{"DUMB_SERVER": c.server, "DUMB_MODELS": strings.Join(c.modelList(), ","),
 		"DUMB_CAPACITY": strconv.Itoa(c.capacity), "DUMB_TOKEN_FILE": token, "DUMB_HEADLESS": "1"}
 	c.addOllamaEnvironment(envs)
+	c.addNameEnvironment(envs)
 	if c.channel != update.ChannelStable {
 		envs["DUMB_CHANNEL"] = c.channel
 	}

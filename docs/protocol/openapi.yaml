@@ -926,6 +926,16 @@ components:
       required: [worker_version, protocol_version, models, capacity]
       properties:
         worker_version: { type: string }
+        worker_name:
+          type: string
+          description: >
+            Optional human-readable name shown in the admin panel (the worker
+            sends its hostname unless configured otherwise). Display only: it is
+            never used for authentication, routing or identity, which stay on
+            the credential's `worker_id`. The server trims surrounding
+            whitespace and keeps at most 64 characters; a name with invalid
+            UTF-8, control or format characters is treated as absent rather
+            than rejected. Absent in older workers; older servers ignore it.
         protocol_version: { type: integer, minimum: 1 }
         models:
           type: array
@@ -1144,6 +1154,10 @@ components:
       required: [worker_id, worker_version, models, capacity, live_leases, free_slots, last_seen, state]
       properties:
         worker_id: { type: string }
+        worker_name:
+          type: string
+          maxLength: 64
+          description: Display-only name from the worker's latest hello after server-side normalization; absent when the worker sent none or an invalid one. Not an identifier.
         worker_version: { type: string }
         models: { type: array, items: { type: string } }
         capacity: { type: integer, minimum: 0 }

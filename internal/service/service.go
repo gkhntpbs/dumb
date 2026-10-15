@@ -211,7 +211,7 @@ func WindowsFailureArgs(c Config) []string {
 var envFlags = map[string]string{
 	"DUMB_SERVER": "server", "DUMB_TOKEN_FILE": "token-file", "DUMB_MODELS": "models",
 	"DUMB_CAPACITY": "capacity", "DUMB_OLLAMA": "ollama", "DUMB_CHANNEL": "channel",
-	"DUMB_UPDATE_URL": "update-url",
+	"DUMB_UPDATE_URL": "update-url", "DUMB_WORKER_NAME": "name",
 }
 
 // Print returns the service definition as it would be installed.

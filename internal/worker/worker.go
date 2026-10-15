@@ -68,6 +68,7 @@ type Config struct {
 	Capacity  int      // concurrent jobs; default 1
 	OllamaURL string   // default ollama.DefaultURL
 	Version   string   // this worker's semantic version
+	Name      string   // display-only label sent in hello; "" = hostname; never an identity
 	Logger    *log.Logger
 	Ollama    Generator // default: an ollama.Client for OllamaURL
 	OnHello   func()    // called after every successful hello, or server check while no model is present (optional)
@@ -173,6 +174,13 @@ func New(cfg Config) (*Worker, error) {
 	}
 	if cfg.Capacity <= 0 {
 		cfg.Capacity = 1
+	}
+	if cfg.Name != "" {
+		if cfg.Name = protocol.NormalizeWorkerName(cfg.Name); cfg.Name == "" {
+			return nil, errors.New("worker: name must not be blank or contain control characters")
+		}
+	} else if host, err := os.Hostname(); err == nil {
+		cfg.Name = protocol.NormalizeWorkerName(host) // an unusable hostname sends no name
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(io.Discard, "", 0)
@@ -477,7 +485,7 @@ func (w *Worker) sleep(ctx context.Context, attempt int) error {
 // hello introduces the worker with models, retrying transient failures until ctx ends.
 func (w *Worker) hello(ctx context.Context, models []string) error {
 	req := protocol.HelloRequest{
-		WorkerVersion: w.cfg.Version, ProtocolVersion: protocol.Version,
+		WorkerVersion: w.cfg.Version, WorkerName: w.cfg.Name, ProtocolVersion: protocol.Version,
 		Models: models, Capacity: w.cfg.Capacity, Features: []string{protocol.FeatureAck},
 	}
 	for attempt := 0; ; attempt++ {
@@ -492,7 +500,7 @@ func (w *Worker) hello(ctx context.Context, models []string) error {
 				w.maxWait = d
 				w.mu.Unlock()
 			}
-			w.log.Printf("hello: worker %s, models %v, capacity %d, max wait %s", res.WorkerID, models, w.cfg.Capacity, res.MaxWait)
+			w.log.Printf("hello: worker %s (name %q), models %v, capacity %d, max wait %s", res.WorkerID, w.cfg.Name, models, w.cfg.Capacity, res.MaxWait)
 			if w.cfg.OnHello != nil {
 				w.cfg.OnHello()
 			}
