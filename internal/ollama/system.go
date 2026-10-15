@@ -150,6 +150,9 @@ func (s *System) Detect(ctx context.Context) Detection {
 
 // Install installs Ollama the official way for s.GOOS.
 func (s *System) Install(ctx context.Context) error {
+	if s.Client != nil && s.Client.remote {
+		return ErrRemoteManaged
+	}
 	switch s.GOOS {
 	case "linux":
 		return s.Runner.Run(ctx, "sh", "-c", LinuxInstallScript)
@@ -166,6 +169,9 @@ func (s *System) Install(ctx context.Context) error {
 func (s *System) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if s.Client != nil && s.Client.remote {
+		return ErrRemoteManaged
 	}
 	d := s.Detect(ctx)
 	switch {

@@ -90,6 +90,7 @@ func parseInstallFlags(args []string, stderr io.Writer) (*installOptions, error)
 	fs.StringVar(&c.models, "models", os.Getenv("DUMB_MODELS"), "comma-separated models (env DUMB_MODELS)")
 	fs.IntVar(&c.capacity, "capacity", capDefault, "concurrent jobs (env DUMB_CAPACITY)")
 	fs.StringVar(&c.ollamaURL, "ollama", env("DUMB_OLLAMA", ollama.DefaultURL), "Ollama URL (env DUMB_OLLAMA)")
+	fs.BoolVar(&c.ollamaRemote, "ollama-remote", os.Getenv("DUMB_OLLAMA_REMOTE") == "1", "use an Ollama on a private-network host; never managed (env DUMB_OLLAMA_REMOTE=1)")
 	fs.StringVar(&c.channel, "channel", env("DUMB_CHANNEL", update.ChannelStable), "update channel: stable or beta (env DUMB_CHANNEL)")
 	fs.StringVar(&c.updateURL, "update-url", env("DUMB_UPDATE_URL", update.DefaultBaseURL), "GitHub API base URL for releases (env DUMB_UPDATE_URL)")
 	fs.BoolVar(&o.system, "system", false, "install a hardened system unit running as user \"dumb\" (needs root)")
@@ -118,7 +119,7 @@ func parseInstallFlags(args []string, stderr io.Writer) (*installOptions, error)
 
 // checkOllamaURL validates the configured Ollama endpoint without contacting it.
 func checkOllamaURL(c *config) error {
-	_, err := ollama.New(c.ollamaURL)
+	_, err := c.ollamaClient()
 	return err
 }
 

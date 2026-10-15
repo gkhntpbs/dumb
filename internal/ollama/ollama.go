@@ -1,7 +1,8 @@
 // Package ollama talks to the local Ollama HTTP API and manages the Ollama install.
 //
-// The client only ever talks to a loopback address: a worker's models are never
-// reached over the network, and a misconfigured URL fails loudly instead.
+// By default the client only ever talks to a loopback address, and a
+// misconfigured URL fails loudly. The explicit remote mode (Open with remote)
+// allows a host on a private network instead and never manages that Ollama.
 package ollama
 
 import (
@@ -40,9 +41,13 @@ type APIError struct {
 func (e *APIError) Error() string { return fmt.Sprintf("ollama: HTTP %d: %s", e.Status, e.Message) }
 
 type Client struct {
-	base *url.URL
-	http *http.Client
+	base   *url.URL
+	http   *http.Client
+	remote bool // a private-network Ollama this worker does not manage
 }
+
+// Remote reports whether the client talks to a remote (private-network) Ollama.
+func (c *Client) Remote() bool { return c.remote }
 
 // New returns a client for baseURL ("" means DefaultURL). It refuses any
 // non-loopback host.
@@ -65,8 +70,12 @@ func NewWithTransport(baseURL string, transport http.RoundTripper) (*Client, err
 		return nil, fmt.Errorf("ollama: %q: scheme must be http or https", baseURL)
 	}
 	if !IsLoopbackHost(u.Hostname()) {
-		return nil, fmt.Errorf("ollama: %q is not a loopback address; Ollama must only be used on 127.0.0.1", baseURL)
+		return nil, fmt.Errorf("ollama: %q is not a loopback address; Ollama must only be used on 127.0.0.1 (a private-network Ollama needs the explicit -ollama-remote opt-in)", baseURL)
 	}
+	return newClient(u, transport)
+}
+
+func newClient(u *url.URL, transport http.RoundTripper) (*Client, error) {
 	hc := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("ollama: redirects are not followed")
 	}}
@@ -180,6 +189,9 @@ type Progress struct {
 // Pull downloads model, calling progress (if non-nil) for every status line.
 // It succeeds only when Ollama reports "success".
 func (c *Client) Pull(ctx context.Context, model string, progress func(Progress)) error {
+	if c.remote {
+		return ErrRemoteManaged
+	}
 	res, err := c.do(ctx, http.MethodPost, "/api/pull", map[string]any{"model": model, "stream": true})
 	if err != nil {
 		return err

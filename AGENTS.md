@@ -24,7 +24,7 @@ GitHub Actions, not yet run for real. Next: see `TODO.md`.
 | `internal/queue/` | In-memory job queue with leases | **ACTIVE** |
 | `internal/server/` | HTTP handlers for the protocol, rate limits (`ratelimit.go`), request-id logging | **ACTIVE** |
 | `internal/auth/` | `Authenticator` interface + `StaticTokens` reference (hash-only, revocable) | **ACTIVE** |
-| `internal/ollama/` | Loopback-only API client, staged macOS install, owned CLI and bounded readiness recovery | **ACTIVE** |
+| `internal/ollama/` | Loopback API client (private-network opt-in: `remote.go`), staged macOS install, owned CLI and bounded readiness recovery | **ACTIVE** |
 | `internal/worker/` | Agent loop: hello, long-poll, run job, post result | **ACTIVE** |
 | `internal/recoverylab/` | Scoped inert filesystem/API/command fault fixtures; no native installers or host Ollama contact | test tooling |
 | `internal/menubar/`, `macos/` | Versioned stdio menu helper and native AppKit source; no inbound listener | **ACTIVE** |
@@ -55,7 +55,9 @@ in the private `ops` repository, never here.
 - **Security does not rely on secrecy.** Nothing in this repository depends on being hidden;
   it relies on secrets that are never in it.
 - **Workers accept no inbound connections.** Outbound HTTPS (long-poll) to the server only.
-  Ollama listens on `127.0.0.1` only.
+  Ollama listens on `127.0.0.1` only. Sole exception: the explicit `-ollama-remote` opt-in
+  uses an Ollama on a private-network host (RFC 1918 / `fc00::/7`, checked at dial time) and
+  never manages it — see `docs/remote-ollama.md` and workspace ADR-0018.
 - **Go, standard library first.** A third-party dependency in the server needs a written reason.
   Worker-only dependencies are `golang.org/x/crypto/blake2b` for minisign and
   `golang.org/x/sys/windows` for native SCM and token ACL handling, plus

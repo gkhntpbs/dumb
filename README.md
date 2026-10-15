@@ -40,7 +40,8 @@ none of them are online.
 - **Pull, not push.** Workers long-poll the server over outbound HTTPS. No open ports, no
   tunnels, no VPN; a worker behind any home NAT just works.
 - **Ollama does the inference.** The worker is a small background daemon that manages a
-  local Ollama (installs it or uses the existing one) and talks to it on `127.0.0.1` only.
+  local Ollama (installs it or uses the existing one) and talks to it on `127.0.0.1` only
+  (an explicit opt-in allows an Ollama elsewhere on the private network: `docs/remote-ollama.md`).
 - **Fallback.** When no worker answers in time, the caller takes its cloud path instead.
 - **Signed, atomic, reversible updates** from GitHub Releases.
 

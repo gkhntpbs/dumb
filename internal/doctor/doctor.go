@@ -38,6 +38,10 @@ type Doctor struct {
 	Version    string
 	Models     []string
 	OllamaPort string // default 11434
+	// Remote: Ollama runs on another host of the private network (the
+	// -ollama-remote opt-in). This worker does not manage it, so the local
+	// install and exposure checks do not apply.
+	Remote bool
 
 	Ollama         Ollama
 	Detect         func(ctx context.Context) ollama.Detection
@@ -72,6 +76,9 @@ func fail(name, detail string) Result { return Result{name, false, detail} }
 
 func (d *Doctor) installed(ctx context.Context) Result {
 	const name = "Ollama installed"
+	if d.Remote {
+		return pass(name, "remote Ollama on the private network; installed and managed on its own host")
+	}
 	det := d.Detect(ctx)
 	switch {
 	case det.Path != "":
@@ -90,11 +97,17 @@ func (d *Doctor) reachable(ctx context.Context) Result {
 	if err != nil {
 		return fail(name, err.Error())
 	}
+	if d.Remote {
+		return pass(name, "version "+v+" on a private-network host (remote mode)")
+	}
 	return pass(name, "version "+v+" on loopback")
 }
 
 func (d *Doctor) notExposed(ctx context.Context) Result {
 	const name = "Ollama not exposed"
+	if d.Remote {
+		return pass(name, "not checked in remote mode: the remote Ollama listens on the private network by design; keep that network trusted")
+	}
 	if h := d.Getenv("OLLAMA_HOST"); h != "" && !loopbackHostSetting(h) {
 		return fail(name, "OLLAMA_HOST="+h+" makes Ollama listen beyond loopback; unset it or use 127.0.0.1")
 	}
@@ -154,6 +167,8 @@ func (d *Doctor) models(ctx context.Context) []Result {
 			rs = append(rs, fail(name, "cannot list models: "+err.Error()))
 		case ollama.HasModel(names, m):
 			rs = append(rs, pass(name, "present"))
+		case d.Remote:
+			rs = append(rs, fail(name, "missing on the remote Ollama; run `ollama pull "+m+"` on that host (the worker never pulls in remote mode)"))
 		default:
 			rs = append(rs, fail(name, "missing; run `dumb-worker setup` or `ollama pull "+m+"`"))
 		}

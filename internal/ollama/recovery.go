@@ -102,6 +102,9 @@ func (r *Recovery) progress(stage, model string, completed, total int64) {
 func (r *Recovery) attempt(ctx context.Context) error {
 	r.progress("checking", "", 0, 0)
 	system := r.cfg.System
+	if system.Client.remote {
+		return r.checkRemote(ctx)
+	}
 	if r.restart.Swap(false) && system.Owned() {
 		stop, cancel := context.WithTimeout(ctx, 5*time.Second)
 		err := system.StopOwned(stop)
@@ -207,9 +210,37 @@ func (r *Recovery) attempt(ctx context.Context) error {
 	return nil
 }
 
+// checkRemote is recovery for a remote Ollama: it only checks reachability and
+// the configured models. Nothing is installed, started, stopped or pulled; the
+// caller stops advertising and retries with backoff.
+func (r *Recovery) checkRemote(ctx context.Context) error {
+	if err := r.probe(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("%w: %w", ErrRemoteUnavailable, err)
+	}
+	r.progress("reachable", "", 0, 0)
+	r.progress("api-ready", "", 0, 0)
+	probe, cancel := context.WithTimeout(ctx, r.cfg.ProbeTimeout)
+	models, err := r.cfg.System.Client.List(probe)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrRemoteUnavailable, err)
+	}
+	for _, model := range r.cfg.Models {
+		if !HasModel(models, model) {
+			return fmt.Errorf("%w: %s", ErrRemoteModelMissing, model)
+		}
+		r.progress("model-ready", model, 0, 0)
+	}
+	r.progress("ready", "", 0, 0)
+	return nil
+}
+
 func permanentRecovery(err error) bool {
 	var api *APIError
-	return errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrExist) || errors.Is(err, syscall.ENOSPC) || errors.Is(err, ErrExternalEndpoint) || errors.Is(err, ErrOccupiedEndpoint) || (errors.As(err, &api) && api.Status >= 400 && api.Status < 500 && api.Status != 429)
+	return errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrExist) || errors.Is(err, syscall.ENOSPC) || errors.Is(err, ErrExternalEndpoint) || errors.Is(err, ErrOccupiedEndpoint) || errors.Is(err, ErrRemoteModelMissing) || errors.Is(err, ErrNotPrivate) || (errors.As(err, &api) && api.Status >= 400 && api.Status < 500 && api.Status != 429)
 }
 
 func (r *Recovery) Ensure(ctx context.Context) error {
@@ -249,7 +280,12 @@ func (r *Recovery) Ensure(ctx context.Context) error {
 	return err
 }
 
-func (r *Recovery) Close(ctx context.Context) error { return r.cfg.System.StopOwned(ctx) }
+func (r *Recovery) Close(ctx context.Context) error {
+	if r.cfg.System.Client.remote {
+		return nil
+	}
+	return r.cfg.System.StopOwned(ctx)
+}
 
 func (r *Recovery) ReportFailure(err error) {
 	var api *APIError

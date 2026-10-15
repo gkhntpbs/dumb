@@ -17,6 +17,7 @@
 //	-models      DUMB_MODELS      comma-separated Ollama models to serve
 //	-capacity    DUMB_CAPACITY    jobs run at the same time (default 1)
 //	-ollama      DUMB_OLLAMA      Ollama URL (default http://127.0.0.1:11434; loopback only)
+//	-ollama-remote DUMB_OLLAMA_REMOTE=1  allow an Ollama on a private-network host (never managed)
 //	-channel     DUMB_CHANNEL     update channel: stable (default) or beta
 //	-update-url  DUMB_UPDATE_URL  GitHub API base URL for releases (default https://api.github.com)
 //
@@ -90,6 +91,7 @@ type config struct {
 	system                               bool // service: Linux system unit
 	headless                             bool
 	ollamaConfigured                     bool
+	ollamaRemote                         bool // -ollama-remote: private-network Ollama, not managed
 	ollamaDataDir                        string
 	ollamaModelsDir                      string
 	newSystem                            func(*ollama.Client) *ollama.System
@@ -140,7 +142,8 @@ func parseFlags(name string, args []string, stderr io.Writer) (*config, []string
 	fs.StringVar(&c.tokenFile, "token-file", os.Getenv("DUMB_TOKEN_FILE"), "token file, mode 0600 (env DUMB_TOKEN_FILE)")
 	fs.StringVar(&c.models, "models", os.Getenv("DUMB_MODELS"), "comma-separated models (env DUMB_MODELS)")
 	fs.IntVar(&c.capacity, "capacity", capDefault, "concurrent jobs (env DUMB_CAPACITY)")
-	fs.StringVar(&c.ollamaURL, "ollama", env("DUMB_OLLAMA", ollama.DefaultURL), "Ollama URL, loopback only (env DUMB_OLLAMA)")
+	fs.StringVar(&c.ollamaURL, "ollama", env("DUMB_OLLAMA", ollama.DefaultURL), "Ollama URL, loopback only unless -ollama-remote (env DUMB_OLLAMA)")
+	fs.BoolVar(&c.ollamaRemote, "ollama-remote", os.Getenv("DUMB_OLLAMA_REMOTE") == "1", "use an Ollama on a private-network host (10/8, 172.16/12, 192.168/16, fc00::/7); it is never installed, started or pulled to (env DUMB_OLLAMA_REMOTE=1)")
 	fs.StringVar(&c.channel, "channel", env("DUMB_CHANNEL", update.ChannelStable), "update channel: stable or beta (env DUMB_CHANNEL)")
 	fs.StringVar(&c.updateURL, "update-url", env("DUMB_UPDATE_URL", update.DefaultBaseURL), "GitHub API base URL for releases (env DUMB_UPDATE_URL)")
 	if name == "service" {
@@ -224,7 +227,7 @@ func cmdRun(ctx context.Context, c *config, logger *log.Logger) int {
 		logger.Print(err)
 		return exitError
 	}
-	client, err := ollama.New(c.ollamaURL)
+	client, err := c.ollamaClient()
 	if err != nil {
 		logger.Print(err)
 		return exitError
@@ -321,14 +324,14 @@ func cmdDoctor(ctx context.Context, c *config, stdout io.Writer) int {
 	if _, err := worker.CheckServerURL(c.server); err != nil {
 		pre = append(pre, doctor.Result{Name: "Server URL", Detail: err.Error()})
 	}
-	oc, err := ollama.New(c.ollamaURL)
+	oc, err := c.ollamaClient()
 	if err != nil {
 		pre = append(pre, doctor.Result{Name: "Ollama URL", Detail: err.Error()})
 		doctor.Print(stdout, pre)
 		return exitError
 	}
 	d := &doctor.Doctor{
-		ServerURL: c.server, Token: token, Version: version, Models: c.modelList(), OllamaPort: oc.Port(),
+		ServerURL: c.server, Token: token, Version: version, Models: c.modelList(), OllamaPort: oc.Port(), Remote: oc.Remote(),
 		Ollama: oc, Detect: ollama.NewSystem(oc).Detect,
 		HTTP:   &http.Client{Timeout: 10 * time.Second},
 		Getenv: os.Getenv, InterfaceAddrs: net.InterfaceAddrs,
@@ -341,7 +344,7 @@ func cmdDoctor(ctx context.Context, c *config, stdout io.Writer) int {
 }
 
 func cmdSetup(ctx context.Context, c *config, stdout io.Writer, logger *log.Logger) int {
-	if _, err := ollama.New(c.ollamaURL); err != nil {
+	if _, err := c.ollamaClient(); err != nil {
 		logger.Print(err)
 		return exitError
 	}
@@ -360,7 +363,7 @@ func cmdSetup(ctx context.Context, c *config, stdout io.Writer, logger *log.Logg
 
 // runSetup brings Ollama to readiness for the configured models (bounded).
 func runSetup(ctx context.Context, c *config, logger *log.Logger) error {
-	oc, err := ollama.New(c.ollamaURL)
+	oc, err := c.ollamaClient()
 	if err != nil {
 		return err
 	}
@@ -465,4 +468,13 @@ func (c *config) addOllamaEnvironment(envs map[string]string) {
 	if c.ollamaConfigured || c.ollamaURL != ollama.DefaultURL {
 		envs["DUMB_OLLAMA"] = c.ollamaURL
 	}
+	if c.ollamaRemote {
+		envs["DUMB_OLLAMA_REMOTE"] = "1"
+	}
+}
+
+// ollamaClient opens the configured Ollama: loopback only, or a private-network
+// host with the explicit remote opt-in.
+func (c *config) ollamaClient() (*ollama.Client, error) {
+	return ollama.Open(c.ollamaURL, c.ollamaRemote)
 }

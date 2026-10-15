@@ -403,11 +403,12 @@ func TestInstallRespectsProbationAndSymlinks(t *testing.T) {
 func TestInstallCustomServiceNameAndRemote(t *testing.T) {
 	f := newInstallFixture(t)
 	if err := f.install("-server", "http://127.0.0.1:18080", "-models", "m", "-token-file", f.tokenFile("t"),
-		"-service-name", "dumb-worker-accept", "-channel", "beta"); err != nil {
+		"-service-name", "dumb-worker-accept", "-channel", "beta", "-ollama-remote", "-ollama", "http://192.168.10.20:11434"); err != nil {
 		t.Fatal(err)
 	}
 	u := read(t, filepath.Join(f.home, ".config", "systemd", "user", "dumb-worker-accept.service"))
-	if !strings.Contains(u, `"DUMB_CHANNEL=beta"`) || !strings.Contains(u, `"DUMB_SERVER=http://127.0.0.1:18080"`) {
+	if !strings.Contains(u, `"DUMB_CHANNEL=beta"`) || !strings.Contains(u, `"DUMB_SERVER=http://127.0.0.1:18080"`) ||
+		!strings.Contains(u, `"DUMB_OLLAMA_REMOTE=1"`) || !strings.Contains(u, `"DUMB_OLLAMA=http://192.168.10.20:11434"`) {
 		t.Fatalf("unit:\n%s", u)
 	}
 }

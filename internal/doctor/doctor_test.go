@@ -139,3 +139,29 @@ func TestOllamaHostSetting(t *testing.T) {
 		}
 	}
 }
+
+// In remote mode the local install and exposure checks do not apply and the
+// model hint never suggests a local pull.
+func TestRemoteMode(t *testing.T) {
+	d := healthy(t)
+	d.Remote = true
+	d.Detect = func(context.Context) ollama.Detection {
+		t.Error("remote mode looked for a local Ollama")
+		return ollama.Detection{}
+	}
+	d.Getenv = func(string) string { return "0.0.0.0" } // would fail the local exposure check
+	d.Dial = func(context.Context, string, string) (net.Conn, error) {
+		t.Error("remote mode probed local interfaces")
+		return nil, errors.New("refused")
+	}
+	rs := d.Run(context.Background())
+	var buf bytes.Buffer
+	if !Print(&buf, rs) || !strings.Contains(buf.String(), "private-network host (remote mode)") {
+		t.Fatalf("remote mode:\n%s", buf.String())
+	}
+	d.Models = []string{"absent:1b"}
+	r := find(t, d.Run(context.Background()), "Model absent:1b")
+	if r.OK || !strings.Contains(r.Detail, "on that host") || strings.Contains(r.Detail, "dumb-worker setup") {
+		t.Fatalf("missing model: %+v", r)
+	}
+}
