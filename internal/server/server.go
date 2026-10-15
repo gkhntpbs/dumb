@@ -36,6 +36,7 @@ type Config struct {
 	QueueStateMaxBytes  int64
 	Credentials         CredentialProvider   // optional private registry
 	AdminOrigin         string               // exact browser management origin
+	PublicURL           string               // optional https base URL workers use (may differ from a tunnelled admin origin); validated by New
 	PairingRate         Rate                 // separate attempt limit; default DefaultUnauthRate
 	AdminSessions       AdminSessionProvider // optional browser authentication; implementation belongs to the embedding application
 	Auth                auth.Authenticator
@@ -99,6 +100,13 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.Credentials != nil && !validAdminOrigin(cfg.AdminOrigin) {
 		return nil, errors.New("server: valid exact AdminOrigin required for credentials")
+	}
+	if cfg.PublicURL != "" {
+		u, err := NormalizePublicURL(cfg.PublicURL)
+		if err != nil {
+			return nil, fmt.Errorf("server: public URL: %w", err)
+		}
+		cfg.PublicURL = u
 	}
 	min, err := protocol.ParseReleaseVersion(cfg.MinWorkerVersion)
 	if err != nil {

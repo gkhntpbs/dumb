@@ -12,6 +12,7 @@
 //	DUMB_RATE_CALLER         per-caller token bucket (default 50,100)
 //	DUMB_RATE_UNAUTH         failed authentications per client IP (default 0.5,10)
 //	DUMB_TRUSTED_PROXIES     comma-separated CIDRs whose X-Forwarded-For is believed (default none)
+//	DUMB_PUBLIC_URL          optional public https URL workers use; shown in the admin panel's worker setup commands
 package main
 
 import (
@@ -72,6 +73,9 @@ func run() (result error) {
 		if *r.dst, err = parseRate(os.Getenv(r.key)); err != nil {
 			return fmt.Errorf("%s: %w", r.key, err)
 		}
+	}
+	if cfg.PublicURL, err = publicURLFromEnvironment(); err != nil {
+		return err
 	}
 	if cfg.TrustedProxies, err = parsePrefixes(os.Getenv("DUMB_TRUSTED_PROXIES")); err != nil {
 		return fmt.Errorf("DUMB_TRUSTED_PROXIES: %w", err)
@@ -214,4 +218,18 @@ func queueStateFromEnvironment() (string, int64, error) {
 		return "", 0, errors.New("DUMB_QUEUE_STATE_DIRECTORY is required with DUMB_QUEUE_STATE_MAX_BYTES")
 	}
 	return directory, maxBytes, nil
+}
+
+// publicURLFromEnvironment reads the optional DUMB_PUBLIC_URL: the https base
+// URL workers use, shown in the admin panel's generated setup commands.
+func publicURLFromEnvironment() (string, error) {
+	v := os.Getenv("DUMB_PUBLIC_URL")
+	if v == "" {
+		return "", nil
+	}
+	u, err := server.NormalizePublicURL(v)
+	if err != nil {
+		return "", fmt.Errorf("DUMB_PUBLIC_URL: %w", err)
+	}
+	return u, nil
 }

@@ -21,6 +21,24 @@ loopback listener. This ensures observations read the live queue rather than a
 second server. `ListenAdmin` preserves the numeric-loopback guard. The feature
 remains off by default in the reference public server.
 
+## Session capabilities and the public worker URL
+
+For an authenticated session, `GET /admin/v1/session` also returns the session
+`role` (`admin-read` or `admin-manage`), `credential_management` (true only when
+the server has a credential provider, a browser session provider and an exact
+`AdminOrigin`) and the optional `public_url`. An anonymous request receives only
+`{"authenticated":false}`. Older servers send only `authenticated`; the panel
+treats a missing field as "not available". The panel's **Add worker** flow uses
+these fields to explain a disabled or read-only state instead of failing on the
+strict management Origin check (see [credential-management.md](credential-management.md)).
+
+`Config.PublicURL` (reference server: `DUMB_PUBLIC_URL`) is the https base URL
+workers use to reach the server. The admin page is usually reached through an
+SSH tunnel, so its own origin is not that URL. `New` refuses a value that is not
+absolute https with a host, or that has user info, a query or a fragment; a
+trailing slash is removed. When it is unset, the panel asks for the server URL
+and remembers only that URL in the browser's `localStorage`.
+
 All admin responses use `Cache-Control: no-store`. Login/logout require an
 Origin matching the request Host, and cross-site fetches are denied. These
 refusals (403) happen before the provider runs; a provider that also implements

@@ -64,8 +64,13 @@ type AdminQueue struct {
 	Items      []AdminJob `json:"items"`
 }
 
+// AdminSession reports the browser session. Role, CredentialManagement and
+// PublicURL are set only for an authenticated session.
 type AdminSession struct {
-	Authenticated bool `json:"authenticated"`
+	Authenticated        bool   `json:"authenticated"`
+	Role                 string `json:"role,omitempty"`
+	CredentialManagement bool   `json:"credential_management,omitempty"`
+	PublicURL            string `json:"public_url,omitempty"`
 }
 
 type AdminLogin struct {

@@ -233,6 +233,10 @@ paths:
       tags: [admin]
       operationId: adminSession
       summary: Inspect the same-origin browser session.
+      description: >
+        Returns the authentication state and, for an authenticated session only,
+        its role, whether credential management is configured and the optional
+        public worker URL. Never returns identity or credentials.
       security: []
       responses:
         "200":
@@ -902,8 +906,33 @@ components:
       type: object
       additionalProperties: false
       required: [authenticated]
+      description: >
+        The optional fields are present only for an authenticated session, so an
+        anonymous request learns nothing about the server configuration. Older
+        servers send only authenticated; clients treat a missing field as absent
+        capability.
       properties:
         authenticated: { type: boolean }
+        role:
+          type: string
+          enum: [admin-read, admin-manage]
+          description: Role of the authenticated session. Only admin-manage may create pairing codes.
+        credential_management:
+          type: boolean
+          description: >
+            True when the server has credential management configured (a credential
+            provider, a browser session provider and an exact admin origin), so
+            admin-manage sessions can call the credential and pairing endpoints.
+            Absent or false means those endpoints are unavailable.
+        public_url:
+          type: string
+          format: uri
+          maxLength: 2048
+          pattern: "^https://"
+          description: >
+            Optional public HTTPS base URL that workers use to reach this server.
+            The admin page may be reached through a tunnel, so its own origin is not
+            this URL. Absent when not configured.
     AdminLogin:
       type: object
       additionalProperties: false

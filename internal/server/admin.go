@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/gkhntpbs/dumb/internal/branding"
 	"io"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -95,7 +97,11 @@ func (s *Server) AdminHandler() http.Handler {
 			return
 		}
 		p, err := s.adminPrincipal(r)
-		writeJSON(w, 200, protocol.AdminSession{Authenticated: err == nil && (p.Role == auth.RoleAdminRead || p.Role == auth.RoleAdminManage)})
+		if err != nil || (p.Role != auth.RoleAdminRead && p.Role != auth.RoleAdminManage) {
+			writeJSON(w, 200, protocol.AdminSession{})
+			return
+		}
+		writeJSON(w, 200, protocol.AdminSession{Authenticated: true, Role: string(p.Role), CredentialManagement: s.credentialManagement(), PublicURL: s.cfg.PublicURL})
 	})
 	mux.HandleFunc("/admin/v1/login", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -239,6 +245,29 @@ func (s *Server) AdminHandler() http.Handler {
 		r.Body = http.MaxBytesReader(w, r.Body, 1024)
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// credentialManagement reports whether the management endpoints can serve at
+// all: they need the provider, cookie sessions and the exact admin origin.
+func (s *Server) credentialManagement() bool {
+	return s.cfg.Credentials != nil && s.cfg.AdminSessions != nil && s.cfg.AdminOrigin != ""
+}
+
+// NormalizePublicURL validates the public worker URL: absolute https with a
+// host, no user info, query or fragment; a trailing slash is removed.
+func NormalizePublicURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil || len(raw) > 2048:
+		return "", errors.New("not a valid URL")
+	case u.Scheme != "https" || u.Host == "" || u.Hostname() == "":
+		return "", errors.New("must be an absolute https URL with a host")
+	case u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") || u.Opaque != "":
+		return "", errors.New("must not contain user info, a query or a fragment")
+	case strings.ContainsAny(raw, " \t\n\r\"'`\\<>"):
+		return "", errors.New("must not contain spaces, quotes or angle brackets")
+	}
+	return strings.TrimRight(u.String(), "/"), nil
 }
 
 func adminPage(w http.ResponseWriter, r *http.Request) (int, int, bool) {

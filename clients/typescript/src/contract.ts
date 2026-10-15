@@ -395,6 +395,9 @@ export interface components {
         };
         AdminSession: {
             authenticated: boolean;
+            role?: "admin-read" | "admin-manage";
+            credential_management?: boolean;
+            public_url?: string;
         };
         AdminLogin: {
             password: string;
