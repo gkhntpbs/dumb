@@ -21,7 +21,11 @@ The existing GoReleaser archives still contain CLI binaries. Native helper
 signing, notarization and release packaging remain pending.
 
 Configuration uses the existing worker flags/environment and mode-0600 token
-file. Run the application's `Contents/MacOS/dumb-worker` with these settings, or
+file. With pairing enabled on the server, the admin panel's **Devices > Add
+worker** dialog shows the macOS commands: `dumb-worker pair` (hidden code
+prompt) writes the token to `~/Library/Application Support/DUMB/worker-token`,
+then `dumb-worker service install` uses it; **Re-pair worker** replaces that
+file and restarts the agent with `launchctl kickstart -k`. Run the application's `Contents/MacOS/dumb-worker` with these settings, or
 use its `service install` command to generate the existing launchd configuration.
 No service is installed by the build. An unbundled macOS CLI intentionally uses
 `run -headless` or `DUMB_HEADLESS=1`; development and command-line QA scripts opt

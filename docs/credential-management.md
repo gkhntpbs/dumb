@@ -50,7 +50,39 @@ accepted leases retain their result/deadline semantics; token management does
 not silently cancel them. Worker presence can remain visible until its ordinary
 freshness timeout, and credential changes do not restart worker processes.
 
-The existing read-only admin UI has no credential-management controls. These
-endpoints and the explicit CLI provide the workflow without changing native
-setup screens. Actual registry, migration and production enablement belong in
-the private embedding application, not this repository.
+## Admin panel: Add worker and Re-pair
+
+The admin panel creates pairing codes itself; no private script is needed. The
+Devices view has an **Add worker** button and each worker's details dialog a
+**Re-pair worker** action, which sends that `worker_id` so the identity is kept
+(use it before the current credential expires; the old credential stops working
+when the new code is exchanged). The dialog takes an optional display name (it
+only fills `-name` in the generated commands; nothing is stored server-side),
+the models, the code lifetime (2, 5 or 10 minutes, default 10) and the
+credential lifetime (7, 30, 90, 180 days or 1 year, default 1 year).
+
+**Generate** calls `POST /admin/v1/pairing` once (repeated clicks cannot create
+a second code). The result shows the code with a Copy button, a countdown to
+`expires_at` and an expired state, the worker ID, and copy-able Linux, macOS and
+Windows commands that read the code from a hidden prompt, never from the command
+line. The plaintext code exists only in memory and one text node while the
+dialog is open; closing it (Close or Escape), expiry, sign-out or session loss
+erases it. It is never written to browser storage or logs.
+
+The commands use `public_url` from `GET /admin/v1/session` (server
+`Config.PublicURL`, reference server `DUMB_PUBLIC_URL`), not the page origin,
+because the panel is reached through an SSH tunnel. Without it the dialog asks
+for the server URL (https only) and remembers only that URL in the browser.
+
+The session endpoint also reports the session `role` and
+`credential_management`. Without management configured, **Add worker** opens an
+explanation instead of failing on the strict Origin check; an `admin-read`
+session sees a disabled button. Management requests still need the exact
+configured `AdminOrigin`, so open the panel at that origin (scheme, host and
+port of the tunnel). Errors (401, 403, 404, 409, 429, 503, timeouts) are shown
+as plain messages. Acceptance: [qa/add-worker-2026-10-15.md](qa/add-worker-2026-10-15.md).
+
+The native setup screens are unchanged: the Windows first-run setup still asks
+for a worker token, so the generated Windows commands pair first and hand the
+resulting token to that setup. Actual registry, migration and production
+enablement belong in the private embedding application, not this repository.

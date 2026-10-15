@@ -243,6 +243,17 @@ supervisor/worker to stop and removes this attempt's installed files. Local
 runtime diagnostics are retained in the restricted `worker.log`, not the public
 repository.
 
+**Where the credential comes from.** Setup asks for a worker token, not a
+pairing code. With pairing enabled on the server, the admin panel's
+**Devices > Add worker** dialog shows a Windows tab: it pairs first with
+`dumb-worker.exe pair` (the code is read with a masked PowerShell prompt and
+piped through stdin, because this GUI-subsystem build shows no console prompt),
+copies the resulting token to the clipboard for this setup's hidden token prompt
+and removes the file. **Re-pair worker** replaces
+`%LOCALAPPDATA%\DUMB\Worker\token` in place; then Quit from the tray and start
+DUMB Worker again. These generated commands have not yet been run on a Windows
+host. A pre-issued token from the operator still works as before.
+
 Later double-clicks and sign-in startup launch the saved desktop configuration
 without a setup console. A per-installation mutex prevents duplicate workers.
 Services and explicit CLI commands retain their separate behavior. This flow

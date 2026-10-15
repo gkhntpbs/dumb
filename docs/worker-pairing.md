@@ -1,7 +1,10 @@
 # Worker pairing
 
 The optional credential-management provider can issue a one-time worker pairing
-code. Obtain a code from an authorized administrator, then run:
+code. An administrator creates it in the admin panel (**Devices > Add worker**,
+or **Re-pair worker** in a worker's details), which also shows ready-to-run
+commands for Linux, macOS and Windows; see
+[credential-management.md](credential-management.md). Then run:
 
 ```sh
 dumb-worker pair -server https://your-server.example -token-file /private/path/token
@@ -35,6 +38,18 @@ tray/menu or service after pairing. Re-pairing does not invoke the installer or
 bypass its configuration guard. Creating a code alone does not retire an old
 credential; successful exchange does. Existing pre-issued-token setup remains
 available. The native setup UI has no pairing selection in this release.
+
+The Windows build uses the GUI subsystem, so `pair` shows no console prompt when
+started from PowerShell. Pipe the code through stdin instead; the admin panel
+generates exactly this, reading the code with a masked prompt so it never
+reaches the command line or history:
+
+```powershell
+$Code = Read-Host 'Pairing code' -AsSecureString
+[Net.NetworkCredential]::new('', $Code).Password |
+  .\dumb-worker.exe pair -server https://your-server.example -token-file $Token 2>&1 | Out-Host
+Remove-Variable Code
+```
 
 Local acceptance: `go test -count=1 ./cmd/dumb-worker -run TestPair` exercises the
 command dispatcher, TLS HTTP fixture, version header, hidden pipe input,

@@ -40,6 +40,12 @@ sudo dumb-worker install -system -server https://dumb.example -models qwen3:0.6b
 | `-force-pair` | Pair again even though a credential is stored |
 | `-skip-setup` | Start the service even if Ollama or a model is not ready yet (the worker waits without claiming jobs) |
 
+The pairing code comes from the admin panel: **Devices > Add worker** (new
+worker) or **Re-pair worker** in a worker's details (same identity, add
+`-force-pair`). The dialog shows this exact `install.sh` / `dumb-worker install
+-system ... -pair-code-stdin` command with your server URL, models and optional
+name filled in; paste the code when the command asks for it.
+
 The pairing code never appears in arguments, logs or the unit. Prefer
 `-pair-code-file` (delete the file afterwards) or `-pair-code-stdin` (hidden on
 a terminal). `DUMB_PAIR_CODE` is accepted for automation but is visible to the
