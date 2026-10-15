@@ -9,3 +9,56 @@ body{background:#101514}h1,.login-card h1{font-size:24px;letter-spacing:0;font-w
 @media(max-width:700px){h1,.login-card h1{font-size:24px}.brand,.brand-mark{font-size:14px}nav{gap:2px}nav button{padding:10px 5px;font-size:14px;min-width:0}nav button span{font-size:12px}.metric strong,.queue-stage strong{font-size:32px}.performance strong{font-size:24px}.badge{font-size:12px}.sidebar-bottom{font-size:0}.sidebar-bottom button{font-size:12px}.performance{grid-template-columns:1fr;gap:18px}}
 img.brand-mark{display:block;background:transparent;padding:0;object-fit:contain}
 .device-card h3{margin:13px 0 4px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}.device-card .device-id{margin:0 0 12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.id-cell{max-width:130px}.device-card h3.id-title{display:block;white-space:nowrap;text-overflow:ellipsis}
+
+/* Add worker / Re-pair. */
+.pairing-entry{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex:none;max-width:260px;text-align:right;margin-bottom:10px}
+.pairing-entry button{white-space:nowrap;padding:9px 15px}
+.pairing-entry small,.dialog-actions small{font-size:12px;color:var(--muted)}
+.dialog-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px}
+dialog{max-height:calc(100vh - 32px);overflow:auto}
+dialog.pairing-dialog{max-width:760px}
+.pairing-dialog h2{margin:2px 0 0;overflow-wrap:anywhere}
+#pairing-intro{margin:10px 0 0;line-height:1.5}
+.pairing-dialog .section-title{align-items:flex-start}
+.pairing-dialog h3{font-size:14px;margin:0 0 6px}
+.pairing-dialog h3.pairing-step{margin-top:22px}
+.pairing-dialog code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.pairing-unavailable{border:1px solid #6b5a33;background:#2a2619;border-radius:10px;padding:16px;margin-top:14px}
+.pairing-unavailable p{font-size:13px;line-height:1.5;margin:6px 0 0}
+.pairing-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin-top:16px}
+.pairing-fields label{min-width:0}
+.pairing-fields select{width:100%}
+.pairing-server{grid-column:1/-1}
+.pairing-server p{margin:6px 0 0}
+.optional{font-weight:400;color:var(--muted);margin-left:4px}
+.pairing-error{color:#f29c96;font-size:13px;margin:12px 0 0}
+.pairing-result{margin-top:20px;border-top:1px solid var(--line);padding-top:18px}
+.code-box{display:flex;align-items:center;justify-content:space-between;gap:14px;border:1px solid #3f6b55;background:#14201a;border-radius:10px;padding:14px 16px}
+.code-text{min-width:0;display:flex;flex-direction:column;gap:6px}
+.code-text code{font-size:15px;color:#c9f1de;overflow-wrap:anywhere;letter-spacing:.3px}
+.code-box button{flex:none}
+.pairing-result[data-state=expired] .code-box{border-color:var(--line);background:transparent}
+.countdown{font-size:13px;color:#a2cfb7;margin:10px 0 0;font-variant-numeric:tabular-nums}
+.countdown[data-state=soon]{color:#e8c77e}
+.countdown[data-state=expired]{color:#f29c96}
+.pairing-meta{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:12px 0 0;font-size:12px}
+.pairing-meta dd{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow-wrap:anywhere}
+.os-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-top:14px}
+.os-tabs button{background:transparent;color:var(--muted);border-radius:7px 7px 0 0;padding:9px 16px;font-weight:500;border-bottom:2px solid transparent}
+.os-tabs button[aria-selected=true]{color:#a4e8cc;border-bottom-color:#83d5b4;background:#203d30}
+.pairing-commands{padding-top:12px}
+.pairing-commands p{margin:8px 0 0;line-height:1.5}
+.command-block{margin-bottom:12px}
+.command-head{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:#d3ded8;margin-bottom:6px}
+.command-head span{min-width:0}
+.command-head button{flex:none;padding:6px 12px}
+.command-block pre{margin:0;background:#0f1513;border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+.code-text code[hidden]{display:none}
+.command-block code{font-size:12px;line-height:1.55;color:#e3e9e7}
+@media(max-width:700px){.pairing-entry{max-width:150px}
+.pairing-entry button{padding:8px 11px}
+.pairing-fields{grid-template-columns:1fr}
+dialog.pairing-dialog{padding:18px}
+.code-box{flex-direction:column;align-items:stretch}
+.os-tabs button{flex:1;padding:9px 6px}}
+.dialog-actions:has(> button[hidden]:only-child){display:none}

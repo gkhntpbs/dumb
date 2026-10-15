@@ -61,7 +61,21 @@ func run() error {
 	if password == "" {
 		return fmt.Errorf("set QA_ADMIN_PASSWORD or QA_ADMIN_PASSWORD_FILE before starting the preview")
 	}
-	sessions := &fixtureSessions{password: sha256.Sum256([]byte(password)), sessions: make(map[string]time.Time)}
+	// QA_ADMIN_PAIRING: "on" (default) previews Add worker with a fake pairing
+	// provider and an admin-manage session; "read-only" keeps the provider but
+	// signs in as admin-read; "off" configures no credential management.
+	mode := os.Getenv("QA_ADMIN_PAIRING")
+	if mode == "" {
+		mode = "on"
+	}
+	if mode != "on" && mode != "off" && mode != "read-only" {
+		return fmt.Errorf("QA_ADMIN_PAIRING: want on, off or read-only")
+	}
+	role := auth.RoleAdminManage
+	if mode == "read-only" {
+		role = auth.RoleAdminRead
+	}
+	sessions := &fixtureSessions{password: sha256.Sum256([]byte(password)), sessions: make(map[string]time.Time), role: role}
 	caller, workerA, workerB, workerC, workerD := credential(), credential(), credential(), credential(), credential()
 	a.Add("qa-caller", auth.RoleCaller, caller)
 	// Display names: a normal one, none (a worker from before names), one at
@@ -75,8 +89,24 @@ func run() error {
 	for _, token := range []string{workerA, workerB, workerC, workerD} {
 		a.Add(workerID(), auth.RoleWorker, token)
 	}
+	address := os.Getenv("QA_ADMIN_LISTEN")
+	if address == "" {
+		address = "127.0.0.1:52147"
+	}
+	listener, err := server.ListenAdmin(address)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
 	var fixtureOffset time.Duration
-	s, err := server.New(server.Config{Now: func() time.Time { return time.Now().Add(fixtureOffset) }, Auth: a, AdminSessions: sessions, MinWorkerVersion: "0.1.0", OnlineTTL: 24 * time.Hour})
+	cfg := server.Config{Now: func() time.Time { return time.Now().Add(fixtureOffset) }, Auth: a, AdminSessions: sessions, MinWorkerVersion: "0.1.0", OnlineTTL: 24 * time.Hour,
+		// Optional, e.g. https://dumb.example.com; unset previews the editable Server URL field.
+		PublicURL: os.Getenv("QA_ADMIN_PUBLIC_URL")}
+	if mode != "off" {
+		cfg.Credentials = &fakePairing{}
+		cfg.AdminOrigin = "http://" + listener.Addr().String()
+	}
+	s, err := server.New(cfg)
 	if err != nil {
 		return err
 	}
@@ -148,15 +178,6 @@ func run() error {
 	if err := request("POST", "/v1/jobs/"+queuedIDs[6]+"/cancel", caller, nil, nil); err != nil {
 		return err
 	}
-	address := os.Getenv("QA_ADMIN_LISTEN")
-	if address == "" {
-		address = "127.0.0.1:52147"
-	}
-	listener, err := server.ListenAdmin(address)
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
 	h := &http.Server{Handler: s.AdminHandler(), ReadHeaderTimeout: 5 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -180,7 +201,7 @@ func run() error {
 			}
 		}
 	}()
-	fmt.Printf("Admin preview ready: http://%s\nSign in with your configured QA password. No host Ollama, models or services are used. Ctrl-C stops the preview.\n", listener.Addr())
+	fmt.Printf("Admin preview ready: http://%s\nSign in with your configured QA password. Pairing preview: %s. No host Ollama, models, services or credential registry are used. Ctrl-C stops the preview.\n", listener.Addr(), mode)
 	select {
 	case <-ctx.Done():
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -193,6 +214,7 @@ func run() error {
 
 // fixtureSessions is intentionally preview-only and never a production password store.
 type fixtureSessions struct {
+	role     auth.Role
 	mu       sync.Mutex
 	password [32]byte
 	sessions map[string]time.Time
@@ -209,7 +231,7 @@ func (f *fixtureSessions) Authenticate(r *http.Request) (auth.Principal, error) 
 	if !ok || !time.Now().Before(expiry) {
 		return auth.Principal{}, auth.ErrUnauthorized
 	}
-	return auth.Principal{ID: "qa-admin", Role: auth.RoleAdminRead}, nil
+	return auth.Principal{ID: "qa-admin", Role: f.role}, nil
 }
 func (f *fixtureSessions) Login(w http.ResponseWriter, r *http.Request, password string) error {
 	candidate := sha256.Sum256([]byte(password))
@@ -238,4 +260,30 @@ func (f *fixtureSessions) Logout(w http.ResponseWriter, r *http.Request) {
 		delete(f.sessions, auth.HashToken(c.Value))
 	}
 	http.SetCookie(w, &http.Cookie{Name: "dumb-preview-session", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+}
+
+// fakePairing is a preview-only stand-in for the private credential registry.
+// It mints random throwaway codes that nothing can exchange: the preview has no
+// public listener and ExchangePairing always refuses. Nothing is persisted.
+type fakePairing struct{}
+
+func (fakePairing) List(context.Context, int, int) (protocol.CredentialPage, error) {
+	return protocol.CredentialPage{}, server.ErrCredentialUnavailable
+}
+func (fakePairing) Issue(context.Context, protocol.IssueCredentialRequest) (protocol.IssuedCredential, error) {
+	return protocol.IssuedCredential{}, server.ErrCredentialUnavailable
+}
+func (fakePairing) Rotate(context.Context, string, protocol.RotateCredentialRequest) (protocol.IssuedCredential, error) {
+	return protocol.IssuedCredential{}, server.ErrCredentialUnavailable
+}
+func (fakePairing) Revoke(context.Context, string) error { return server.ErrCredentialUnavailable }
+func (fakePairing) CreatePairing(_ context.Context, req protocol.CreatePairingRequest) (protocol.PairingCode, error) {
+	id := req.WorkerID
+	if id == "" {
+		id = workerID()
+	}
+	return protocol.PairingCode{Code: workerID(), ExpiresAt: time.Now().UTC().Add(time.Duration(req.TTLSeconds) * time.Second), WorkerID: id}, nil
+}
+func (fakePairing) ExchangePairing(context.Context, string) (protocol.IssuedCredential, error) {
+	return protocol.IssuedCredential{}, server.ErrPairingDenied
 }
