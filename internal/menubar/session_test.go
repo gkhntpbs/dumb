@@ -72,6 +72,10 @@ func TestSessionFailsClosed(t *testing.T) {
 	for _, mode := range []string{"mismatch", "silent", "missing", "die"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("QA_MENU_CHILD", mode)
+			// The helper child is this test binary. Under -race its runtime
+			// sleeps GORACE atexit_sleep_ms (default 1s) before exiting, which
+			// alone would exceed the detection window below.
+			t.Setenv("GORACE", "atexit_sleep_ms=0")
 			exe, _ := os.Executable()
 			if mode == "missing" {
 				exe = t.TempDir() + "/missing"
