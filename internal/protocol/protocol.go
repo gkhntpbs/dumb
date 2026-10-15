@@ -22,6 +22,8 @@ const (
 	StateDone    = "done"
 	StateFailed  = "failed"
 	StateExpired = "expired"
+	// StateCancelled: the owning caller cancelled the job before it finished.
+	StateCancelled = "cancelled"
 )
 
 // MaxDeadlineMS bounds SubmitRequest.DeadlineMS.

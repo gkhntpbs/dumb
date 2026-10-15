@@ -269,3 +269,92 @@ test("invalid idempotency keys fail locally before sending", async () => {
   }
   assert.equal(calls, 0);
 });
+
+test("cancel sends one POST to the caller route and returns cancelled or unchanged terminal status", async () => {
+  const calls = [];
+  const c = client(async (url, init) => {
+    calls.push({ url, init });
+    return calls.length === 1 ? response(200, job("cancelled")) : response(409, job("done", { output: "kept" }));
+  });
+  const cancelled = await c.cancel("job/1", { requestId: "cancel-request" });
+  assert.equal(cancelled.state, "cancelled");
+  assert.equal(calls[0].url.pathname, "/v1/jobs/job%2F1/cancel");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.body, undefined);
+  assert.equal(calls[0].init.headers.get("Idempotency-Key"), null);
+  assert.equal(calls[0].init.headers.get("X-Request-ID"), "cancel-request");
+  const finished = await c.cancel("job");
+  assert.equal(finished.state, "done");
+  assert.equal(finished.output, "kept");
+  assert.equal(calls.length, 2);
+  await assert.rejects(c.cancel(""), TypeError);
+});
+
+test("cancel exposes 404 and 401 without retry", async () => {
+  for (const status of [401, 404]) {
+    let calls = 0;
+    const c = client(async () => { calls++; return response(status, { error: "nope" }); });
+    await assert.rejects(c.cancel("job"), error => error instanceof HTTPError && error.status === status);
+    assert.equal(calls, 1);
+  }
+});
+
+test("execute never cancels the server job by default when the hedge elapses", async () => {
+  const paths = [];
+  const c = client(async (url, init) => {
+    paths.push(url.pathname);
+    if (url.pathname === "/v1/jobs") return response(202, job("queued"));
+    return stalled([])(url, init);
+  });
+  const result = await c.execute({ ...request, deadline_ms: 5000 }, { hedgeMs: 30, fallback: async () => "local" });
+  assert.equal(result.reason, "hedge");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(!paths.some(path => path.endsWith("/cancel")));
+});
+
+test("cancelOnAbandon sends one best-effort cancel for a known active job on hedge", async () => {
+  const paths = [];
+  const c = client(async (url, init) => {
+    paths.push(url.pathname);
+    if (url.pathname === "/v1/jobs") return response(202, job("leased"));
+    if (url.pathname.endsWith("/cancel")) throw new TypeError("network down");
+    return stalled([])(url, init);
+  });
+  const result = await c.execute({ ...request, deadline_ms: 5000 }, { hedgeMs: 30, cancelOnAbandon: true, fallback: async () => "local" });
+  assert.equal(result.value, "local");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(paths.filter(path => path.endsWith("/cancel")), ["/v1/jobs/job/cancel"]);
+});
+
+test("cancelOnAbandon cancels on consumer abort and still propagates the abort", async () => {
+  const paths = [];
+  const cancelSignals = [];
+  const controller = new AbortController();
+  const c = client(async (url, init) => {
+    paths.push(url.pathname);
+    if (url.pathname === "/v1/jobs") return response(202, job("queued"));
+    if (url.pathname.endsWith("/cancel")) { cancelSignals.push(init.signal); return response(200, job("cancelled")); }
+    setTimeout(() => controller.abort(new Error("consumer gone")), 5);
+    return stalled([])(url, init);
+  });
+  await assert.rejects(c.execute(request, { signal: controller.signal, cancelOnAbandon: true, fallback: async () => "never" }), /consumer gone/);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(paths.filter(path => path.endsWith("/cancel")).length, 1);
+  assert.deepEqual(cancelSignals, [undefined]);
+});
+
+test("cancelOnAbandon sends nothing when no job id is known or the job already ended", async () => {
+  const paths = [];
+  const c = client(async url => { paths.push(url.pathname); return response(503, { error: "no worker" }); });
+  assert.equal((await c.execute(request, { cancelOnAbandon: true, fallback: async (_, context) => context.reason })).value, "unavailable");
+  const expired = client(async url => { paths.push(url.pathname); return response(410, job("expired")); });
+  assert.equal((await expired.execute(request, { cancelOnAbandon: true, fallback: async (_, context) => context.reason })).value, "expired");
+  assert.ok(!paths.some(path => path.endsWith("/cancel")));
+});
+
+test("a job cancelled elsewhere ends execute with JobError and never runs the fallback", async () => {
+  let fallback = 0;
+  const c = client(async url => url.pathname === "/v1/jobs" ? response(202, job("queued")) : response(410, job("cancelled")));
+  await assert.rejects(c.execute(request, { fallback: async () => { fallback++; return "x"; } }), error => error instanceof JobError && error.reason === "cancelled" && error.job.state === "cancelled");
+  assert.equal(fallback, 0);
+});

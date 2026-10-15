@@ -7,6 +7,8 @@ export type SubmitRequest = components["schemas"]["SubmitRequest"];
 export type JobStatus = components["schemas"]["JobStatus"];
 export type Status = components["schemas"]["Status"];
 export type FallbackReason = "unavailable" | "expired" | "failed" | "hedge";
+/** Why execute ended without DUMB output; "cancelled" never invokes the fallback. */
+export type EndReason = FallbackReason | "cancelled";
 
 export interface ClientConfig {
   baseURL: string;
@@ -35,6 +37,12 @@ export interface FallbackContext extends RequestOptions {
 export interface ExecuteOptions<T> extends RequestOptions {
  idempotencyKey?: string;
   hedgeMs?: number;
+  /**
+   * When execute stops waiting for a job that is still queued or leased (hedge,
+   * elapsed budget, consumer abort or an error while polling), send one
+   * best-effort POST /v1/jobs/{id}/cancel. Off by default: no hidden requests.
+   */
+  cancelOnAbandon?: boolean;
   fallback?: (request: SubmitRequest, context: FallbackContext) => Promise<T>;
 }
 
@@ -62,7 +70,7 @@ export class ProtocolError extends Error {
 }
 
 export class JobError extends Error {
-  constructor(public readonly reason: FallbackReason, public readonly job?: JobStatus) {
+  constructor(public readonly reason: EndReason, public readonly job?: JobStatus) {
     super(`DUMB execution ended: ${reason}`);
     this.name = "JobError";
   }
@@ -73,7 +81,7 @@ function object(value: unknown): value is Record<string, unknown> {
 }
 
 function jobStatus(value: unknown): JobStatus {
-  if (!object(value) || typeof value.job_id !== "string" || !["queued", "leased", "done", "failed", "expired"].includes(String(value.state)) || (value.output !== undefined && typeof value.output !== "string") || (value.error !== undefined && typeof value.error !== "string")) {
+  if (!object(value) || typeof value.job_id !== "string" || !["queued", "leased", "done", "failed", "expired", "cancelled"].includes(String(value.state)) || (value.output !== undefined && typeof value.output !== "string") || (value.error !== undefined && typeof value.error !== "string")) {
     throw new ProtocolError("Invalid job status response");
   }
   return value as unknown as JobStatus;
@@ -165,6 +173,16 @@ export class DUMBClient {
     return jobStatus(await this.#request("GET", `/v1/jobs/${encodeURIComponent(id)}`, waitQuery(options.waitMs), undefined, options, [200, 202, 410]));
   }
 
+  /**
+   * Cancel the caller's own queued or leased job with one POST (no retry).
+   * Returns the cancelled status (200, also on repeat), or the unchanged
+   * terminal status when the job already finished or expired (409).
+   */
+  async cancel(id: string, options: RequestOptions = {}): Promise<JobStatus> {
+    if (!id) throw new TypeError("job id is required");
+    return jobStatus(await this.#request("POST", `/v1/jobs/${encodeURIComponent(id)}/cancel`, "", undefined, options, [200, 409]));
+  }
+
   async status(options: RequestOptions = {}): Promise<Status> {
     const value = await this.#request("GET", "/v1/status", "", undefined, options, [200]);
     if (!object(value) || !Number.isInteger(value.workers_online) || Number(value.workers_online) < 0 || !Array.isArray(value.models) || value.models.some(model => typeof model !== "string")) throw new ProtocolError("Invalid availability response");
@@ -184,23 +202,52 @@ export class DUMBClient {
     const timer = setTimeout(() => controller.abort(new JobError(reason)), budget);
     let job: JobStatus | undefined;
     let fallbackReason: FallbackReason;
+    let inFlight: Promise<JobStatus> | undefined;
+    const cancelActive = (status: JobStatus) => {
+      if (status.state !== "queued" && status.state !== "leased") return;
+      const cancelOptions: RequestOptions = {};
+      if (options.requestId !== undefined) cancelOptions.requestId = options.requestId;
+      this.cancel(status.job_id, cancelOptions).catch(() => {});
+    };
+    const abandon = () => {
+      if (!options.cancelOnAbandon) return;
+      if (job !== undefined) cancelActive(job);
+      // The budget ended while the submission was in flight: cancel the job as
+      // soon as its id arrives. A consumer abort also aborts that request.
+      else inFlight?.then(cancelActive, () => {});
+    };
     try {
       const pending: WaitOptions = { signal: controller.signal };
       if (options.requestId !== undefined) pending.requestId = options.requestId;
       const submission: SubmitOptions = { ...pending, waitMs: budget };
       if (options.idempotencyKey !== undefined) submission.idempotencyKey = options.idempotencyKey;
-      job = await this.submit(request, submission);
+      if (options.cancelOnAbandon) {
+        // Keep the submission alive past the local budget so its job id is
+        // learned and can be cancelled; only the consumer signal aborts it.
+        const detached: SubmitOptions = { ...submission };
+        if (options.signal !== undefined) detached.signal = options.signal;
+        else delete detached.signal;
+        const submitted = this.submit(request, detached);
+        inFlight = submitted;
+        submitted.catch(() => {});
+        job = await abortable(() => submitted, controller.signal);
+      } else {
+        job = await this.submit(request, submission);
+      }
       while (job.state === "queued" || job.state === "leased") {
         const remaining = budget - (performance.now() - started);
         if (remaining <= 0) throw new JobError(reason, job);
         job = await this.getJob(job.job_id, { ...pending, waitMs: remaining });
       }
       if (job.state === "done") return { source: "dumb", output: job.output ?? "", job };
+      if (job.state === "cancelled") throw new JobError("cancelled", job);
       fallbackReason = job.state === "expired" ? "expired" : "failed";
     } catch (error) {
+      abandon();
+      if (error instanceof JobError && error.reason === "cancelled") throw error;
       options.signal?.throwIfAborted();
-      if (controller.signal.aborted && controller.signal.reason instanceof JobError) fallbackReason = controller.signal.reason.reason;
-      else if (error instanceof JobError) fallbackReason = error.reason;
+      if (controller.signal.aborted && controller.signal.reason instanceof JobError) fallbackReason = controller.signal.reason.reason as FallbackReason;
+      else if (error instanceof JobError) fallbackReason = error.reason as FallbackReason;
       else if (error instanceof HTTPError && error.status === 503) fallbackReason = "unavailable";
       else throw error;
     } finally {

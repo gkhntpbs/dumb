@@ -12,13 +12,13 @@ type measurement struct {
 	wait, completion float64
 }
 type Observation struct {
-	At                                                    time.Time
-	Queued, Leased, Done, Failed, Expired, OldestQueuedMS int
-	Samples                                               int
-	MeanWait, MeanCompletion                              *float64
-	Leases                                                map[string]int
-	Jobs                                                  []protocol.AdminJob
-	Total                                                 int
+	At                                                               time.Time
+	Queued, Leased, Done, Failed, Expired, Cancelled, OldestQueuedMS int
+	Samples                                                          int
+	MeanWait, MeanCompletion                                         *float64
+	Leases                                                           map[string]int
+	Jobs                                                             []protocol.AdminJob
+	Total                                                            int
 }
 
 type jobHeap []protocol.AdminJob
@@ -48,7 +48,7 @@ func (q *Queue) Observe(model, state string, offset, limit int) Observation {
 	defer q.mu.Unlock()
 	q.cleanupLocked()
 	now := q.now().UTC()
-	o := Observation{At: now, Done: q.completed, Failed: q.failed, Expired: q.expired, Leases: map[string]int{}, Jobs: []protocol.AdminJob{}}
+	o := Observation{At: now, Done: q.completed, Failed: q.failed, Expired: q.expired, Cancelled: q.cancelled, Leases: map[string]int{}, Jobs: []protocol.AdminJob{}}
 	h := &jobHeap{}
 	for _, j := range q.jobs {
 		current := j.state

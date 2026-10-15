@@ -112,7 +112,7 @@ func decodeRecord(data []byte) (storedJob, error) {
 	if (r.State == protocol.StateQueued || r.State == protocol.StateLeased) && (r.Output != "" || r.Error != "" || r.Key != "" && r.Digest != payloadDigest(r.Request)) {
 		return r, ErrStorage
 	}
-	if r.State == protocol.StateDone && r.Error != "" || r.State == protocol.StateFailed && (r.Error == "" || r.Output != "") || r.State == protocol.StateExpired && (r.Output != "" || r.Error != "") {
+	if r.State == protocol.StateDone && r.Error != "" || r.State == protocol.StateFailed && (r.Error == "" || r.Output != "") || (r.State == protocol.StateExpired || r.State == protocol.StateCancelled) && (r.Output != "" || r.Error != "") {
 		return r, ErrStorage
 	}
 	if !r.RetainUntil.IsZero() && (r.RetainUntil.After(r.Deadline.Add(Retention)) || r.RetainUntil.Before(r.Created.Add(Retention))) {
@@ -133,7 +133,7 @@ func decodeRecord(data []byte) (storedJob, error) {
 		if r.Request.Prompt == "" || len(r.LeaseID) != 32 || r.WorkerID == "" || r.Leased.Before(r.Created) || !r.Leased.Before(r.Deadline) || !r.RetainUntil.IsZero() || r.AckDue.After(r.Deadline) || !r.AckDue.IsZero() && r.AckDue.Before(r.Leased) {
 			return r, ErrStorage
 		}
-	case protocol.StateDone, protocol.StateFailed, protocol.StateExpired:
+	case protocol.StateDone, protocol.StateFailed, protocol.StateExpired, protocol.StateCancelled:
 		if r.Allocation != 0 {
 			return r, ErrStorage
 		}

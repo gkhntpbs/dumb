@@ -170,7 +170,7 @@ func (s *Server) AdminHandler() http.Handler {
 				}
 				o := s.q.Observe("", "", 0, 0)
 				workers := s.adminWorkers(model, "")
-				summary := protocol.AdminSummary{SnapshotAt: o.At, Epoch: s.epoch, Queued: o.Queued, Leased: o.Leased, Done: o.Done, Failed: o.Failed, Expired: o.Expired, OldestQueuedMS: o.OldestQueuedMS, LatencySamples: o.Samples, MeanWaitMS: o.MeanWait, MeanCompletionMS: o.MeanCompletion, MeasurementWindowSeconds: 300, Models: []string{}}
+				summary := protocol.AdminSummary{SnapshotAt: o.At, Epoch: s.epoch, Queued: o.Queued, Leased: o.Leased, Done: o.Done, Failed: o.Failed, Expired: o.Expired, Cancelled: o.Cancelled, OldestQueuedMS: o.OldestQueuedMS, LatencySamples: o.Samples, MeanWaitMS: o.MeanWait, MeanCompletionMS: o.MeanCompletion, MeasurementWindowSeconds: 300, Models: []string{}}
 				for _, wk := range workers {
 					if wk.State == "offline" {
 						continue
@@ -197,7 +197,7 @@ func (s *Server) AdminHandler() http.Handler {
 				rows = rows[min(offset, total):min(offset+limit, total)]
 				writeJSON(w, 200, protocol.AdminWorkers{SnapshotAt: s.cfg.Now().UTC(), Epoch: s.epoch, Total: total, Offset: offset, Limit: limit, Items: rows})
 			case "queue":
-				if state != "" && !slices.Contains([]string{protocol.StateQueued, protocol.StateLeased, protocol.StateDone, protocol.StateFailed, protocol.StateExpired}, state) {
+				if state != "" && !slices.Contains([]string{protocol.StateQueued, protocol.StateLeased, protocol.StateDone, protocol.StateFailed, protocol.StateExpired, protocol.StateCancelled}, state) {
 					writeError(w, 400, "invalid job state")
 					return
 				}

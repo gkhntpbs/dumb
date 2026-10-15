@@ -319,6 +319,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/status": {
         parameters: {
             query?: never;
@@ -434,7 +450,7 @@ export interface components {
         };
         JobStatus: {
             job_id: string;
-            state: "queued" | "leased" | "done" | "failed" | "expired";
+            state: "queued" | "leased" | "done" | "failed" | "expired" | "cancelled";
             output?: string;
             error?: string;
         };
@@ -506,6 +522,7 @@ export interface components {
             done: number;
             failed: number;
             expired: number;
+            cancelled: number;
             models: string[];
             oldest_queued_ms: number;
             latency_samples: number;
@@ -526,7 +543,7 @@ export interface components {
         AdminJob: {
             job_id: string;
             model: string;
-            state: "queued" | "leased" | "done" | "failed" | "expired";
+            state: "queued" | "leased" | "done" | "failed" | "expired" | "cancelled";
             created_at: string;
             deadline_at: string;
             leased_at?: string;
@@ -597,7 +614,7 @@ export interface components {
         IdempotencyKey: string;
         AdminModel: string;
         AdminWorkerState: "online-idle" | "online-busy" | "offline";
-        AdminJobState: "queued" | "leased" | "done" | "failed" | "expired";
+        AdminJobState: "queued" | "leased" | "done" | "failed" | "expired" | "cancelled";
         AdminOffset: number;
         AdminLimit: number;
         WorkerVersion: string;
@@ -1453,6 +1470,48 @@ export interface operations {
                 };
             };
             410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStatus"];
+                };
+            };
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["QueueUnavailable"];
+        };
+    };
+    cancelJob: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Request-ID"?: components["parameters"]["RequestID"];
+            };
+            path: {
+                id: components["parameters"]["JobID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

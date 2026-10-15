@@ -14,6 +14,7 @@ type AdminSummary struct {
 	Done                     int       `json:"done"`
 	Failed                   int       `json:"failed"`
 	Expired                  int       `json:"expired"`
+	Cancelled                int       `json:"cancelled"`
 	Models                   []string  `json:"models"`
 	OldestQueuedMS           int       `json:"oldest_queued_ms"`
 	LatencySamples           int       `json:"latency_samples"`

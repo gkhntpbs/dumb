@@ -24,9 +24,17 @@ info:
     dispatched again: the caller has already given up on it.
 
 
+    **Cancellation.** The owning caller may cancel a queued or leased job with
+    `POST /v1/jobs/{id}/cancel`. A cancelled job is terminal and never dispatched
+    again; a leased worker learns about it on its next lease check (`409` from
+    ack) and stops generating. Whichever terminal transition (result, deadline
+    expiry or cancellation) is committed first wins; later ones are refused.
+    Closing a waiting caller connection is never treated as cancellation.
+
+
     **Capacity.** A worker never holds more live leases than the `capacity` of its
-    last hello. A lease ends when its result is posted (done or failed) or when it
-    expires.
+    last hello. A lease ends when its result is posted (done or failed), when it
+    expires, or when its caller cancels the job.
 
 
     **Acknowledgement.** A worker whose hello lists the `ack` feature
@@ -499,8 +507,9 @@ paths:
         "429": { $ref: "#/components/responses/TooManyRequests" }
         "409":
           description: >
-            The lease was revoked (ack too late), has expired, is unknown, or
-            belongs to another worker. Do not run the job.
+            The lease was revoked (ack too late), has expired, was cancelled by
+            its caller, is unknown, or belongs to another worker. Do not run the
+            job; stop generating if it already started.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -530,7 +539,9 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
         "409":
-          description: The lease has expired, was revoked, is unknown, or belongs to another worker.
+          description: >
+            The lease has expired, was revoked, was cancelled by its caller, is
+            unknown, or belongs to another worker. The result is discarded.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -602,7 +613,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "410":
-          description: The deadline passed without a result.
+          description: >
+            The deadline passed without a result (`expired`), or an
+            idempotent replay found a job its caller already cancelled
+            (`cancelled`).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/JobStatus" }
@@ -652,10 +666,60 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "410":
-          description: The deadline passed without a result.
+          description: The deadline passed without a result (`expired`) or the caller cancelled the job (`cancelled`).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/JobStatus" }
+  /v1/jobs/{id}/cancel:
+    post:
+      tags: [caller]
+      operationId: cancelJob
+      summary: Cancel a queued or leased job.
+      description: >
+        Only the authenticated caller principal that submitted the job can
+        cancel it; unknown jobs, jobs owned by another caller and jobs whose
+        retention has ended receive the same 404. Worker and admin credentials
+        are refused with 401. The request has no body.
+
+
+        A queued job leaves the queue at once. A leased job's lease ends at
+        once: its worker's next ack is refused with 409, which stops generation,
+        and a later result is refused with 409 and discarded. The cancelled
+        state is committed to durable storage (when configured) before the
+        response, so it survives restart; its prompt is erased and it stays
+        readable for one minute like any terminal job, together with its
+        Idempotency-Key.
+
+
+        Cancelling a cancelled job again returns 200 with the same status.
+        Cancelling a job that already finished (`done`, `failed`) or expired
+        changes nothing and returns 409 with its current status; a result that
+        was committed first is never discarded. At or after the deadline the
+        job is `expired`, not `cancelled`. Cancellation does not refund the
+        caller: the retained job keeps counting against its retained-job limit
+        until retention ends.
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          description: The job is cancelled (now or by an earlier request).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobStatus" }
+        "409":
+          description: The job already reached another terminal state; its status is returned unchanged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Unknown job, another caller owns it, or retention has ended.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/QueueUnavailable" }
   /v1/status:
     get:
       tags: [caller]
@@ -706,7 +770,7 @@ components:
     AdminJobState:
       name: state
       in: query
-      schema: { type: string, enum: [queued, leased, done, failed, expired] }
+      schema: { type: string, enum: [queued, leased, done, failed, expired, cancelled] }
     AdminOffset:
       name: offset
       in: query
@@ -949,7 +1013,7 @@ components:
         job_id: { type: string }
         state:
           type: string
-          enum: [queued, leased, done, failed, expired]
+          enum: [queued, leased, done, failed, expired, cancelled]
         output: { type: string }
         error: { type: string }
     Status:
@@ -1036,8 +1100,8 @@ components:
     AdminSummary:
       type: object
       additionalProperties: false
-      description: Current queued and leased counts exclude elapsed deadlines. Done, failed and expired are cumulative since epoch. Online slots count each worker once; offline leases remain in the global leased count. Latency covers at most 256 completed jobs in the last 300 seconds; absent samples yield null means. Model filtering affects worker capacity only.
-      required: [snapshot_at, epoch, workers_online, capacity, active_slots, free_slots, queued, leased, done, failed, expired, models, oldest_queued_ms, latency_samples, mean_wait_ms, mean_completion_ms, measurement_window_seconds]
+      description: Current queued and leased counts exclude elapsed deadlines. Done, failed, expired and cancelled are cumulative since epoch. Online slots count each worker once; offline leases remain in the global leased count. Latency covers at most 256 completed jobs in the last 300 seconds; absent samples yield null means. Model filtering affects worker capacity only.
+      required: [snapshot_at, epoch, workers_online, capacity, active_slots, free_slots, queued, leased, done, failed, expired, cancelled, models, oldest_queued_ms, latency_samples, mean_wait_ms, mean_completion_ms, measurement_window_seconds]
       properties:
         snapshot_at: { type: string, format: date-time }
         epoch: { type: string, format: date-time }
@@ -1050,6 +1114,7 @@ components:
         done: { type: integer, minimum: 0 }
         failed: { type: integer, minimum: 0 }
         expired: { type: integer, minimum: 0 }
+        cancelled: { type: integer, minimum: 0 }
         models: { type: array, items: { type: string } }
         oldest_queued_ms: { type: integer, minimum: 0 }
         latency_samples: { type: integer, minimum: 0 }
@@ -1078,7 +1143,7 @@ components:
       properties:
         job_id: { type: string }
         model: { type: string }
-        state: { type: string, enum: [queued, leased, done, failed, expired] }
+        state: { type: string, enum: [queued, leased, done, failed, expired, cancelled] }
         created_at: { type: string, format: date-time }
         deadline_at: { type: string, format: date-time }
         leased_at: { type: string, format: date-time }

@@ -2,14 +2,15 @@
 
 The queue supports explicit volatile mode and an optional private durable store.
 `docs/durable-queue.md` documents process recovery and caller-scoped idempotent
-submission. This change does not add cancellation. The authority for HTTP
+submission. Explicit caller cancellation (`POST /v1/jobs/{id}/cancel`) follows
+the same ownership rule; see `docs/qa/cancellation-2026-10-15.md`. The authority for HTTP
 behavior is `docs/protocol/openapi.yaml`.
 
 Every accepted job belongs to the authenticated caller principal ID. The request
 cannot select or override that ID. A replacement credential for the same
 principal can still read its jobs. Another caller receives the same immediate
 `404` error as an unknown job, before a requested wait begins. This applies to
-queued, leased, done, failed and expired jobs. Worker acknowledgement and result
+queued, leased, done, failed, expired and cancelled jobs, and to cancellation. Worker acknowledgement and result
 submission continue to use the existing worker ID and live lease checks.
 
 Admission under one queue mutex checks caller limits before aggregate limits.

@@ -53,3 +53,43 @@ test("actual Go server: availability, immediate 503, submit/wait, execution, exp
   assert.equal((await worker("/v1/workers/goodbye")).status, 204);
   assert.equal((await client.status()).workers_online, 0);
 });
+
+test("actual Go server: cancel queued and leased jobs, repeat, after completion and abandon", async () => {
+  assert.equal((await worker("/v1/workers/hello", "POST", { worker_version: "0.1.0", protocol_version: 1, models: ["fixture"], capacity: 1, features: ["ack"] })).status, 200);
+  const queued = await client.submit({ ...input, deadline_ms: 5000 });
+  assert.equal((await client.cancel(queued.job_id)).state, "cancelled");
+  assert.equal((await client.cancel(queued.job_id)).state, "cancelled");
+  assert.equal((await client.getJob(queued.job_id)).state, "cancelled");
+  assert.equal((await worker("/v1/jobs/next?wait=100ms", "GET")).status, 204);
+
+  const leased = await client.submit({ ...input, deadline_ms: 5000 });
+  const assignment = await (await worker("/v1/jobs/next?wait=500ms", "GET")).json();
+  assert.equal(assignment.job_id, leased.job_id);
+  assert.equal((await client.cancel(leased.job_id)).state, "cancelled");
+  assert.equal((await worker(`/v1/jobs/${assignment.job_id}/ack`, "POST", { lease_id: assignment.lease_id })).status, 409);
+  assert.equal((await worker(`/v1/jobs/${assignment.job_id}/result`, "POST", { lease_id: assignment.lease_id, output: "discarded" })).status, 409);
+  const keyed = await client.submit({ ...input, deadline_ms: 5000 }, { idempotencyKey: "cancel-replay" });
+  assert.equal((await client.cancel(keyed.job_id)).state, "cancelled");
+  const replayed = await client.submit({ ...input, deadline_ms: 5000 }, { idempotencyKey: "cancel-replay" });
+  assert.equal(replayed.job_id, keyed.job_id);
+  assert.equal(replayed.state, "cancelled");
+
+  const done = await client.submit({ ...input, deadline_ms: 5000 });
+  const finishing = await (await worker("/v1/jobs/next?wait=500ms", "GET")).json();
+  await finish(finishing, "kept");
+  const afterDone = await client.cancel(done.job_id);
+  assert.equal(afterDone.state, "done");
+  assert.equal(afterDone.output, "kept");
+
+  // The hedge fires while the submission is in flight; the job id arrives
+  // later and is cancelled, so a worker never receives it.
+  const abandoned = await client.execute({ ...input, deadline_ms: 5000 }, { hedgeMs: 5, cancelOnAbandon: true, fallback: async (_, context) => context.reason });
+  assert.equal(abandoned.reason, "hedge");
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal((await worker("/v1/jobs/next?wait=100ms", "GET")).status, 204);
+
+  const other = new DUMBClient({ baseURL, token: workerToken });
+  await assert.rejects(other.cancel(done.job_id), error => error instanceof HTTPError && error.status === 401);
+  await assert.rejects(client.cancel("missing"), error => error instanceof HTTPError && error.status === 404);
+  assert.equal((await worker("/v1/workers/goodbye")).status, 204);
+});

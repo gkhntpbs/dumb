@@ -26,6 +26,8 @@ var (
 	ErrOwner          = errors.New("caller identity is required")
 	// ErrLease means the lease is unknown, expired, already used, or held by another worker.
 	ErrLease = errors.New("lease is not valid")
+	// ErrFinished means the job already reached a terminal state other than cancelled.
+	ErrFinished = errors.New("job already finished")
 )
 
 // Retention is how long a finished job stays readable after it finishes.
@@ -54,7 +56,7 @@ type job struct {
 	output         string
 	err            string
 	acked          bool          // the lease holder acknowledged the assignment
-	done           chan struct{} // closed when state becomes done, failed or expired
+	done           chan struct{} // closed when state becomes done, failed, expired or cancelled
 
 	expireUnreported bool // expired, OnExpire not called yet
 }
@@ -72,6 +74,7 @@ type Queue struct {
 	completed       int
 	failed          int
 	expired         int
+	cancelled       int
 	samples         []measurement
 	mu              sync.Mutex
 	jobs            map[string]*job
@@ -350,6 +353,54 @@ func (q *Queue) releaseLocked(j *job, leaseID string) bool {
 	q.pending = slices.Insert(q.pending, 0, j)
 	q.wakeLocked()
 	return true
+}
+
+// Cancel moves the owner's queued or leased job to the terminal cancelled
+// state. The change is persisted before it is published; a leased job's lease
+// ends at once, so the worker's next ack or result is refused. Cancelling a
+// cancelled job again returns its status; a job that already finished
+// otherwise returns its unchanged status with ErrFinished. Other owners and
+// unknown jobs get ErrNotFound.
+func (q *Queue) Cancel(owner, jobID string) (protocol.JobStatus, error) {
+	defer q.flushExpirations()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	// Deadline expiry is applied first: at or after the deadline the job is
+	// expired, not cancelled.
+	q.cleanupLocked()
+	if err := q.storageErrorLocked(); err != nil {
+		return protocol.JobStatus{}, err
+	}
+	j, ok := q.jobs[jobID]
+	if !ok || owner == "" || j.owner != owner {
+		return protocol.JobStatus{}, ErrNotFound
+	}
+	if !active(j) {
+		st := protocol.JobStatus{JobID: j.id, State: j.state, Output: j.output, Error: j.err}
+		if j.state == protocol.StateCancelled {
+			return st, nil
+		}
+		return st, ErrFinished
+	}
+	next := *j
+	next.state = protocol.StateCancelled
+	next = q.prepareTerminal(&next)
+	if err := q.persistLocked(&next); err != nil {
+		return protocol.JobStatus{}, err
+	}
+	if j.state == protocol.StateQueued {
+		if i := slices.Index(q.pending, j); i >= 0 {
+			q.pending = slices.Delete(q.pending, i, i+1)
+		}
+	} else {
+		q.endLeaseLocked(j)
+	}
+	oldBytes := j.bytes
+	*j = next
+	j.bytes = oldBytes
+	q.cancelled++
+	q.finishLocked(j)
+	return protocol.JobStatus{JobID: j.id, State: j.state}, nil
 }
 
 // Leases returns the number of live leases workerID holds.

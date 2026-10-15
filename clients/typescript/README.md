@@ -61,8 +61,12 @@ and tests. `requestId` is sent as `X-Request-ID`.
 `submit(input, { waitMs, signal })` calls `POST /v1/jobs` once. `getJob(id,
 { waitMs, signal })` calls `GET /v1/jobs/{id}`; `status({ signal })` calls
 `GET /v1/status`. Wait values are milliseconds, encoded as Go duration strings.
-Low-level methods return queued, leased, done, failed or expired job statuses;
-HTTP 410 is a normal expired job response.
+Low-level methods return queued, leased, done, failed, expired or cancelled job
+statuses; HTTP 410 is a normal expired or cancelled job response. `cancel(id,
+{ signal })` calls `POST /v1/jobs/{id}/cancel` once: it returns the cancelled
+status (also when repeated) or, with HTTP 409, the unchanged done, failed or
+expired status; a result committed first is never discarded. Only the caller
+that submitted the job can cancel it; others receive 404.
 
 `execute` submits once and polls that job until it finishes or the configured
 budget expires. Its budget is the smaller of `deadline_ms` and optional
@@ -81,10 +85,21 @@ malformed successful responses throw `ProtocolError`. Network errors propagate.
 No HTTP request is automatically retried: retrying a submission after losing
 its response can create duplicate jobs.
 
-A local hedge or abort stops the client's waiting request, not the server job.
-The protocol has no caller cancellation endpoint; the job remains eligible
-until its submitted deadline. Set `deadline_ms` to the actual usefulness
-budget. `num_predict` follows the server's contract ceiling and may truncate
+By default a local hedge or abort stops the client's waiting request, not the
+server job: it remains eligible until its submitted deadline, and no hidden
+request is sent. With `cancelOnAbandon: true`, execute sends one best-effort
+cancel (no retry, errors ignored, fallback not delayed) when it stops waiting
+for a job that is still queued or leased. If the hedge fires while the
+submission is still in flight, that submission is allowed to finish (only the
+consumer signal aborts it) and the job is cancelled once its id arrives. A
+consumer abort during submission loses the id; to cancel such an ambiguous
+submission, repeat `submit` with the same `idempotencyKey` (it returns the
+original job while it is retained) and call `cancel`. After retention ends
+the same key creates a new job. A job seen as `cancelled` while polling ends
+execute with `JobError` reason `cancelled`; the fallback is not run, because
+the application already abandoned that work. A cancelled leased job stops
+generating on its worker at the next lease check (about 250 ms). Set
+`deadline_ms` to the actual usefulness budget. `num_predict` follows the server's contract ceiling and may truncate
 output, including JSON; consumers must validate output before using it.
 
 `examples/node-batch.ts` consumes completions in Node; `examples/fetch-handler.ts`

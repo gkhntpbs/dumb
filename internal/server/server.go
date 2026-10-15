@@ -143,6 +143,7 @@ func New(cfg Config) (*Server, error) {
 	s.mux.HandleFunc("POST /v1/jobs/{id}/result", s.asWorker(s.result))
 	s.mux.HandleFunc("POST /v1/jobs", s.asCaller(s.submit))
 	s.mux.HandleFunc("GET /v1/jobs/{id}", s.asCaller(s.getJob))
+	s.mux.HandleFunc("POST /v1/jobs/{id}/cancel", s.asCaller(s.cancelJob))
 	s.mux.HandleFunc("GET /v1/status", s.asCaller(s.status))
 	branding.Register(s.mux)
 	return s, nil
@@ -553,6 +554,24 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, p auth.Principal
 	s.waitAndWrite(w, r, p.ID, r.PathValue("id"), wait)
 }
 
+// cancelJob cancels the caller's own queued or leased job. A closed caller
+// connection never cancels anything; only this explicit request does.
+func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request, p auth.Principal) {
+	id := r.PathValue("id")
+	st, err := s.q.Cancel(p.ID, id)
+	switch {
+	case err == nil:
+		s.reqLog(r).Info("job cancelled", "job_id", id, "caller", p.ID)
+		writeJSON(w, http.StatusOK, st)
+	case errors.Is(err, queue.ErrFinished):
+		writeJSON(w, http.StatusConflict, st)
+	case errors.Is(err, queue.ErrNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	default:
+		writeError(w, http.StatusServiceUnavailable, "queue storage unavailable")
+	}
+}
+
 func (s *Server) waitAndWrite(w http.ResponseWriter, r *http.Request, owner, id string, wait time.Duration) {
 	deadline, err := s.q.Deadline(owner, id)
 	if err != nil {
@@ -581,7 +600,7 @@ func (s *Server) waitAndWrite(w http.ResponseWriter, r *http.Request, owner, id 
 	switch st.State {
 	case protocol.StateDone, protocol.StateFailed:
 		code = http.StatusOK
-	case protocol.StateExpired:
+	case protocol.StateExpired, protocol.StateCancelled:
 		code = http.StatusGone
 	}
 	writeJSON(w, code, st)
