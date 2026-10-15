@@ -63,12 +63,17 @@ type HelloResponse struct {
 	WorkerID         string `json:"worker_id"`
 	MinWorkerVersion string `json:"min_worker_version"`
 	MaxWait          string `json:"max_wait"`
+	// RecommendedWorkerVersion, when set, is the version the operator wants
+	// workers to run. A worker older than it checks its signed release source
+	// at once; the server never supplies binaries or download locations.
+	RecommendedWorkerVersion string `json:"recommended_worker_version,omitempty"`
 }
 
 // WhoAmI answers GET /v1/workers/me, a side-effect-free credential and version check.
 type WhoAmI struct {
-	WorkerID         string `json:"worker_id"`
-	MinWorkerVersion string `json:"min_worker_version"`
+	WorkerID                 string `json:"worker_id"`
+	MinWorkerVersion         string `json:"min_worker_version"`
+	RecommendedWorkerVersion string `json:"recommended_worker_version,omitempty"`
 }
 
 type SubmitRequest struct {

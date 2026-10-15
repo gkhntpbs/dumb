@@ -417,10 +417,12 @@ export interface components {
             worker_id: string;
             min_worker_version: string;
             max_wait: string;
+            recommended_worker_version?: string;
         };
         WhoAmI: {
             worker_id: string;
             min_worker_version: string;
+            recommended_worker_version?: string;
         };
         SubmitRequest: {
             model: string;

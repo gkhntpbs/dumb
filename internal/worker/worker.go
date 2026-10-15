@@ -71,6 +71,10 @@ type Config struct {
 	Logger    *log.Logger
 	Ollama    Generator // default: an ollama.Client for OllamaURL
 	OnHello   func()    // called after every successful hello, or server check while no model is present (optional)
+	// OnRecommended receives the server's recommended worker version from
+	// every successful hello or server check that carries one (optional).
+	// It must not block; the supervisor decides whether to act on it.
+	OnRecommended func(version string)
 
 	// Lister is asked every ModelCheck which models Ollama has. Default: the
 	// Ollama generator when it can list (an *ollama.Client); nil Lister and a
@@ -271,13 +275,15 @@ func (w *Worker) logNoModel(have []string) {
 func (w *Worker) checkIn(ctx context.Context) error {
 	w.authorized.Store(false)
 	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	code, err := w.call(rctx, http.MethodGet, "/v1/workers/me", "", nil, nil)
+	var me protocol.WhoAmI
+	code, err := w.call(rctx, http.MethodGet, "/v1/workers/me", "", nil, &me)
 	cancel()
 	switch {
 	case fatal(err):
 		return err
 	case err == nil && code == http.StatusOK:
 		w.authorized.Store(true)
+		w.recommended(me.RecommendedWorkerVersion)
 		if w.cfg.OnHello != nil {
 			w.cfg.OnHello()
 		}
@@ -490,6 +496,7 @@ func (w *Worker) hello(ctx context.Context, models []string) error {
 			if w.cfg.OnHello != nil {
 				w.cfg.OnHello()
 			}
+			w.recommended(res.RecommendedWorkerVersion)
 			return nil
 		case fatal(err):
 			return err
@@ -503,6 +510,13 @@ func (w *Worker) hello(ctx context.Context, models []string) error {
 		if err := w.sleep(ctx, attempt); err != nil {
 			return err
 		}
+	}
+}
+
+// recommended passes a server-advertised version to OnRecommended.
+func (w *Worker) recommended(v string) {
+	if v != "" && w.cfg.OnRecommended != nil {
+		w.cfg.OnRecommended(v)
 	}
 }
 

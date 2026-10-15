@@ -5,6 +5,7 @@
 //	DUMB_ADDR                listen address (default 127.0.0.1:8080; put TLS in front of it)
 //	DUMB_TOKENS_FILE         token table, one "<id> <worker|caller> <sha256-hex-of-token>" per line
 //	DUMB_MIN_WORKER_VERSION  oldest worker version accepted (default 0.0.0)
+//	DUMB_RECOMMENDED_WORKER_VERSION  version advertised to workers; older ones check their signed release source now (default none)
 //	DUMB_ACK_WINDOW          time an ack-capable worker has to acknowledge an assignment (default 2s)
 //	DUMB_LOG_LEVEL           debug, info (default), warn or error; logs are JSON on stderr
 //	DUMB_RATE_WORKER         per-worker token bucket "<per-second>,<burst>" (default 50,100; "off" disables)
@@ -51,7 +52,8 @@ func run() (result error) {
 		return fmt.Errorf("DUMB_LOG_LEVEL: %w", err)
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-	cfg := server.Config{Auth: tokens, MinWorkerVersion: env("DUMB_MIN_WORKER_VERSION", "0.0.0"), Logger: logger}
+	cfg := server.Config{Auth: tokens, MinWorkerVersion: env("DUMB_MIN_WORKER_VERSION", "0.0.0"),
+		RecommendedWorkerVersion: os.Getenv("DUMB_RECOMMENDED_WORKER_VERSION"), Logger: logger}
 	if cfg.QueueStateDirectory, cfg.QueueStateMaxBytes, err = queueStateFromEnvironment(); err != nil {
 		return err
 	}

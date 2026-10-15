@@ -376,7 +376,7 @@ paths:
     post:
       tags: [worker]
       operationId: workerHello
-      summary: Introduce a worker and learn the server's floor.
+      summary: Introduce a worker and learn the server's floor and recommended version.
       parameters:
         - $ref: "#/components/parameters/WorkerVersion"
         - $ref: "#/components/parameters/RequestID"
@@ -951,12 +951,26 @@ components:
         max_wait:
           type: string
           description: Longest `wait` the server honours on `GET /v1/jobs/next`.
+        recommended_worker_version:
+          type: string
+          description: >
+            Optional. The worker version the operator wants the fleet to run;
+            never lower than `min_worker_version`, absent when not configured.
+            A worker older than it checks its own signed release source (GitHub
+            Releases, minisign-verified) at once instead of waiting for its
+            periodic check, without interrupting jobs in flight. The server never
+            supplies a binary or a download location, and a version the worker
+            has rolled back is not retried. Unlike `min_worker_version`, being
+            older is not an error.
     WhoAmI:
       type: object
       required: [worker_id, min_worker_version]
       properties:
         worker_id: { type: string }
         min_worker_version: { type: string }
+        recommended_worker_version:
+          type: string
+          description: Optional; same meaning as in `HelloResponse`.
     SubmitRequest:
       type: object
       required: [model, prompt, deadline_ms]

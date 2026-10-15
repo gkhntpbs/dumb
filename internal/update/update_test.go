@@ -327,6 +327,9 @@ func TestCrashLoopRollback(t *testing.T) {
 	if !slices.Contains(readSkip(u.Exe), "0.2.0") {
 		t.Fatal("0.2.0 not skipped")
 	}
+	if !u.Skipped("0.2.0") || u.Skipped("0.2.1") {
+		t.Fatal("Skipped does not report the rolled-back version only")
+	}
 }
 
 func TestSkipListLetsNewerVersionThrough(t *testing.T) {

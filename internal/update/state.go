@@ -63,6 +63,12 @@ func readState(exe string) (state, bool, error) {
 	return st, true, nil
 }
 
+// Skipped reports whether version was rolled back on this machine; such a
+// version is never applied again, whoever recommends it.
+func (u *Updater) Skipped(version string) bool {
+	return slices.Contains(readSkip(u.Exe), version)
+}
+
 // readSkip returns the versions that were rolled back and must not be retried.
 func readSkip(exe string) []string {
 	var skip []string

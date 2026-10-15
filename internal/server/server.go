@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/gkhntpbs/dumb/internal/branding"
 	"io"
 	"log/slog"
@@ -38,11 +39,15 @@ type Config struct {
 	PairingRate         Rate                 // separate attempt limit; default DefaultUnauthRate
 	AdminSessions       AdminSessionProvider // optional browser authentication; implementation belongs to the embedding application
 	Auth                auth.Authenticator
-	MinWorkerVersion    string           // e.g. "0.1.0"
-	MaxWait             time.Duration    // cap on GET /v1/jobs/next?wait=; default 25s
-	OnlineTTL           time.Duration    // a worker is online this long after its last request; default MaxWait+10s
-	Now                 func() time.Time // clock for worker freshness and admin observations; default time.Now
-	Logger              *slog.Logger     // default: discard. Never receives tokens, prompts or outputs.
+	MinWorkerVersion    string // e.g. "0.1.0"
+	// RecommendedWorkerVersion, optional, is advertised in hello and whoami.
+	// Older workers check their signed release source at once; it is never an
+	// error to be older. Must not be below MinWorkerVersion.
+	RecommendedWorkerVersion string
+	MaxWait                  time.Duration    // cap on GET /v1/jobs/next?wait=; default 25s
+	OnlineTTL                time.Duration    // a worker is online this long after its last request; default MaxWait+10s
+	Now                      func() time.Time // clock for worker freshness and admin observations; default time.Now
+	Logger                   *slog.Logger     // default: discard. Never receives tokens, prompts or outputs.
 	// AckWindow is how long a worker that announced the "ack" feature has to
 	// acknowledge an assignment before its lease is revoked and the job goes
 	// back to the front of the queue. Never beyond the job's deadline.
@@ -72,6 +77,7 @@ type Server struct {
 	epoch   time.Time
 	cfg     Config
 	min     protocol.ReleaseVersion
+	rec     string // canonical RecommendedWorkerVersion; "" when not configured
 	q       *queue.Queue
 	mux     *http.ServeMux
 	mu      sync.Mutex
@@ -97,6 +103,17 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	var rec string
+	if cfg.RecommendedWorkerVersion != "" {
+		r, err := protocol.ParseReleaseVersion(cfg.RecommendedWorkerVersion)
+		if err != nil {
+			return nil, fmt.Errorf("server: recommended worker version: %w", err)
+		}
+		if r.Less(min) {
+			return nil, fmt.Errorf("server: recommended worker version %s is below the minimum %s", r, min)
+		}
+		rec = r.String()
+	}
 	if cfg.MaxWait <= 0 {
 		cfg.MaxWait = 25 * time.Second
 	}
@@ -119,7 +136,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{epoch: cfg.Now().UTC(), cfg: cfg, min: min, q: q, mux: http.NewServeMux(), workers: map[string]*worker{}, log: cfg.Logger,
+	s := &Server{epoch: cfg.Now().UTC(), cfg: cfg, min: min, rec: rec, q: q, mux: http.NewServeMux(), workers: map[string]*worker{}, log: cfg.Logger,
 		workerLim:  newLimiter(cfg.WorkerRate, time.Now),
 		callerLim:  newLimiter(cfg.CallerRate, time.Now),
 		unauthLim:  newCappedLimiter(cfg.UnauthRate, time.Now, MaxFailedAuthIPs),
@@ -315,9 +332,10 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request, p auth.Principal)
 	s.reqLog(r).Info("worker hello", "worker", p.ID, "worker_version", req.WorkerVersion, "models", req.Models,
 		"capacity", req.Capacity, "features", req.Features)
 	writeJSON(w, http.StatusOK, protocol.HelloResponse{
-		WorkerID:         p.ID,
-		MinWorkerVersion: s.min.String(),
-		MaxWait:          s.cfg.MaxWait.String(),
+		WorkerID:                 p.ID,
+		MinWorkerVersion:         s.min.String(),
+		MaxWait:                  s.cfg.MaxWait.String(),
+		RecommendedWorkerVersion: s.rec,
 	})
 }
 
@@ -340,7 +358,7 @@ func (s *Server) goodbye(w http.ResponseWriter, r *http.Request, p auth.Principa
 
 // whoami confirms the credential and version; unlike hello it changes nothing.
 func (s *Server) whoami(w http.ResponseWriter, _ *http.Request, p auth.Principal) {
-	writeJSON(w, http.StatusOK, protocol.WhoAmI{WorkerID: p.ID, MinWorkerVersion: s.min.String()})
+	writeJSON(w, http.StatusOK, protocol.WhoAmI{WorkerID: p.ID, MinWorkerVersion: s.min.String(), RecommendedWorkerVersion: s.rec})
 }
 
 func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal) {

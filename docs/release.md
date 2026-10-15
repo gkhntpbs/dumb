@@ -69,6 +69,21 @@ worker does **not** exit: it logs and checks again after 15 min, doubling up to
 2 h, so a service manager never restarts it in a loop. A periodic update drains
 first: no new claims, running jobs finish (bounded by their lease deadlines).
 
+**Server-recommended version.** An operator can set
+`DUMB_RECOMMENDED_WORKER_VERSION` on `dumb-server` (embedders: `Config.RecommendedWorkerVersion`;
+never below the floor). The server then returns `recommended_worker_version` in
+the hello and `GET /v1/workers/me` answers. A worker older than it runs the same
+check as the periodic one at once, instead of waiting up to 7 h: the release
+still comes from the worker's own release source, is minisign-verified, swapped
+atomically and put on probation; the server never supplies a binary or a URL.
+The check drains like a periodic update, so jobs in flight finish first. It is
+debounced: the same recommended version triggers at most one check per hour
+(later hellos are ignored), a different newer one is checked at once, and a
+version this worker rolled back (`<exe>.skip.json`) is never retried because of
+a recommendation. A recommendation is advice only: an older worker is not
+refused (that remains the `min_worker_version` `426`), and a channel that has no
+release at that version simply finds nothing to install.
+
 ## Apply, probation and rollback
 
 ```

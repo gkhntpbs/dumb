@@ -249,12 +249,13 @@ func cmdRun(ctx context.Context, c *config, logger *log.Logger) int {
 	s := &supervisor{
 		version: version, log: logger,
 		every: updateEvery, jitter: updateJitter, backoff: upgradeWait, maxBack: upgradeMaxWait,
-		newWorker: func(onHello func()) (runner, error) {
-			cfg := wcfg
-			cfg.OnHello = onHello
-			cfg.OnStatus = desktopStatusObserver(wcfg.OnStatus, func() { platformReady(desktopRuntimeInfo{OllamaPID: system.OwnedPID(), OllamaURL: c.ollamaURL}) })
-			return worker.New(cfg)
-		},
+	}
+	s.newWorker = func(onHello func()) (runner, error) {
+		cfg := wcfg
+		cfg.OnHello = onHello
+		cfg.OnRecommended = s.recommended
+		cfg.OnStatus = desktopStatusObserver(wcfg.OnStatus, func() { platformReady(desktopRuntimeInfo{OllamaPID: system.OwnedPID(), OllamaURL: c.ollamaURL}) })
+		return worker.New(cfg)
 	}
 	exe, err := os.Executable()
 	if err == nil {
