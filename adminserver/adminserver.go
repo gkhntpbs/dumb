@@ -14,6 +14,10 @@ type Principal = auth.Principal
 type Role = auth.Role
 type Authenticator = auth.Authenticator
 type SessionProvider = server.AdminSessionProvider
+
+// OriginRejectionObserver is optionally implemented by a SessionProvider to
+// record admin requests refused as cross-origin before they reach it.
+type OriginRejectionObserver = server.AdminOriginRejectionObserver
 type QueueLimits = queue.Limits
 type Config = server.Config
 type Server = server.Server

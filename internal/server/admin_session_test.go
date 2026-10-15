@@ -157,3 +157,73 @@ func TestAdminLoginRateLimitUsesPeerAddress(t *testing.T) {
 		t.Fatal("forwarded addresses bypassed login limit")
 	}
 }
+
+// observingAdminSessions also implements AdminOriginRejectionObserver.
+type observingAdminSessions struct {
+	fixtureAdminSessions
+	rejected []string
+}
+
+func (o *observingAdminSessions) RejectedOrigin(r *http.Request) {
+	o.rejected = append(o.rejected, r.Method+" "+r.URL.Path)
+}
+
+// Cross-origin admin requests are refused before the provider sees them; a
+// provider that observes refusals is told exactly once per refusal, and the
+// request never reaches Login.
+func TestAdminCrossOriginRefusalIsObserved(t *testing.T) {
+	s, _, _ := adminFixture(t)
+	provider := &observingAdminSessions{fixtureAdminSessions: fixtureAdminSessions{role: auth.RoleAdminManage}}
+	s.cfg.AdminSessions = provider
+	s.cfg.AdminOrigin = "http://admin.invalid"
+	h := s.AdminHandler()
+	for _, tc := range []struct{ method, path, origin, site string }{
+		{"POST", "/admin/v1/login", "https://evil.invalid", ""},
+		{"POST", "/admin/v1/login", "", ""},
+		{"POST", "/admin/v1/login", "http://admin.invalid", "cross-site"},
+		{"POST", "/admin/v1/logout", "https://evil.invalid", ""},
+		{"GET", "/admin/v1/summary", "https://evil.invalid", ""},
+		{"GET", "/admin/v1/credentials", "https://evil.invalid", ""},
+	} {
+		provider.rejected = nil
+		r := httptest.NewRequest(tc.method, "http://admin.invalid"+tc.path, strings.NewReader(`{"password":"fixture"}`))
+		r.Header.Set("Content-Type", "application/json")
+		if tc.origin != "" {
+			r.Header.Set("Origin", tc.origin)
+		}
+		if tc.site != "" {
+			r.Header.Set("Sec-Fetch-Site", tc.site)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("%+v: status %d, want 403", tc, w.Code)
+		}
+		if want := tc.method + " " + tc.path; len(provider.rejected) != 1 || provider.rejected[0] != want {
+			t.Fatalf("%+v: observed %v, want exactly [%s]", tc, provider.rejected, want)
+		}
+	}
+	if provider.calls != 0 {
+		t.Fatalf("refused login reached the provider %d times", provider.calls)
+	}
+	// Same-origin requests are not reported.
+	provider.rejected = nil
+	r := httptest.NewRequest("GET", "http://admin.invalid/admin/v1/session", nil)
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	if len(provider.rejected) != 0 {
+		t.Fatalf("same-origin request reported: %v", provider.rejected)
+	}
+}
+
+// A provider without the optional observer keeps the plain 403.
+func TestAdminCrossOriginRefusalWithoutObserver(t *testing.T) {
+	s, _, _ := adminFixture(t)
+	s.cfg.AdminSessions = &fixtureAdminSessions{role: auth.RoleAdminRead}
+	r := httptest.NewRequest("POST", "http://admin.invalid/admin/v1/login", strings.NewReader(`{"password":"fixture"}`))
+	r.Header.Set("Origin", "https://evil.invalid")
+	w := httptest.NewRecorder()
+	s.AdminHandler().ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403", w.Code)
+	}
+}

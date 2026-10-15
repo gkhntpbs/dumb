@@ -28,6 +28,22 @@ type AdminSessionProvider interface {
 	Logout(http.ResponseWriter, *http.Request)
 }
 
+// AdminOriginRejectionObserver is optionally implemented by an
+// AdminSessionProvider. The admin handler refuses cross-origin requests with
+// 403 before Authenticate, Login or Logout run; RejectedOrigin is then called
+// once so the provider can record the refusal (for example as a failed login).
+// It receives the unread request, must not read its body and must not block.
+type AdminOriginRejectionObserver interface {
+	RejectedOrigin(*http.Request)
+}
+
+func (s *Server) rejectAdminOrigin(w http.ResponseWriter, r *http.Request) {
+	if o, ok := s.cfg.AdminSessions.(AdminOriginRejectionObserver); ok {
+		o.RejectedOrigin(r)
+	}
+	writeError(w, 403, "cross-origin request denied")
+}
+
 func (s *Server) adminPrincipal(r *http.Request) (auth.Principal, error) {
 	if s.cfg.AdminSessions != nil {
 		return s.cfg.AdminSessions.Authenticate(r)
@@ -213,11 +229,11 @@ func (s *Server) AdminHandler() http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
 		if managedCredentialPath(r.URL.Path) && (r.Header.Get("Origin") != s.cfg.AdminOrigin || s.cfg.AdminOrigin == "" || r.Header.Get("Sec-Fetch-Site") == "cross-site") {
-			writeError(w, 403, "cross-origin request denied")
+			s.rejectAdminOrigin(w, r)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/admin/v1/") && !adminSameOrigin(r, (r.URL.Path == "/admin/v1/login" || r.URL.Path == "/admin/v1/logout") && r.Method == http.MethodPost) {
-			writeError(w, 403, "cross-origin request denied")
+			s.rejectAdminOrigin(w, r)
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1024)

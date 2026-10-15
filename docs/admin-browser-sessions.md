@@ -22,7 +22,10 @@ second server. `ListenAdmin` preserves the numeric-loopback guard. The feature
 remains off by default in the reference public server.
 
 All admin responses use `Cache-Control: no-store`. Login/logout require an
-Origin matching the request Host, and cross-site fetches are denied. Forwarded
+Origin matching the request Host, and cross-site fetches are denied. These
+refusals (403) happen before the provider runs; a provider that also implements
+`OriginRejectionObserver` gets `RejectedOrigin(r)` once per refusal so it can
+audit it (the request body is unread and must stay so). Forwarded
 host/protocol/address headers never satisfy the origin check. TLS-terminating
 proxies must preserve the public Host. The private provider additionally requires HTTPS and an Origin matching the
 actual request scheme and Host, and issues Secure, HttpOnly, SameSite cookies.
