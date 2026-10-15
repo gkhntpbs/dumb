@@ -71,7 +71,9 @@ sudo sh install.sh -system -server https://dumb.example -models qwen3:0.6b -pair
 sh install.sh --download-only ./verified     # verify and stop, no install
 ```
 
-`--version X.Y.Z` pins a release (default: the latest stable). Do not pipe the
+`--version X.Y.Z` pins a release (default: the latest stable). The `install`
+command first ships in the release after v0.2.0; with v0.2.0 use
+`--download-only` and the manual steps in `service.md`. Do not pipe the
 script into `sh` when pairing from stdin: stdin would be the script. The
 script's own trust root is wherever you fetched it from; compare it with the
 tagged source if that matters to you. Requirements: `curl` or `wget`, `tar`,
