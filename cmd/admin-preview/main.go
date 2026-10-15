@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -31,6 +32,15 @@ func credential() string {
 	return hex.EncodeToString(b)
 }
 
+// workerID looks like a production worker id: 43 random base64url characters.
+func workerID() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -52,11 +62,19 @@ func run() error {
 		return fmt.Errorf("set QA_ADMIN_PASSWORD or QA_ADMIN_PASSWORD_FILE before starting the preview")
 	}
 	sessions := &fixtureSessions{password: sha256.Sum256([]byte(password)), sessions: make(map[string]time.Time)}
-	caller, workerA, workerB, workerC := credential(), credential(), credential(), credential()
+	caller, workerA, workerB, workerC, workerD := credential(), credential(), credential(), credential(), credential()
 	a.Add("qa-caller", auth.RoleCaller, caller)
-	a.Add("studio-node", auth.RoleWorker, workerA)
-	a.Add("desk-node", auth.RoleWorker, workerB)
-	a.Add("lab-node", auth.RoleWorker, workerC)
+	// Display names: a normal one, none (a worker from before names), one at
+	// the 64-character limit, and a short one.
+	names := map[string]string{
+		workerA: "Studio Mac mini",
+		workerB: "",
+		workerC: "Research lab workstation with an exceptionally long display name",
+		workerD: "Living room Pi 5",
+	}
+	for _, token := range []string{workerA, workerB, workerC, workerD} {
+		a.Add(workerID(), auth.RoleWorker, token)
+	}
 	var fixtureOffset time.Duration
 	s, err := server.New(server.Config{Now: func() time.Time { return time.Now().Add(fixtureOffset) }, Auth: a, AdminSessions: sessions, MinWorkerVersion: "0.1.0", OnlineTTL: 24 * time.Hour})
 	if err != nil {
@@ -81,11 +99,14 @@ func run() error {
 		}
 		return nil
 	}
-	for _, token := range []string{workerA, workerB, workerC} {
+	hello := func(token string) error {
+		return request("POST", "/v1/workers/hello", token, protocol.HelloRequest{WorkerVersion: "0.1.0", WorkerName: names[token], ProtocolVersion: protocol.Version, Models: []string{"smollm2:135m", "llama3.2:3b"}, Capacity: 3}, nil)
+	}
+	for _, token := range []string{workerA, workerB, workerD, workerC} {
 		if token == workerC {
 			fixtureOffset = -25 * time.Hour
 		}
-		if err := request("POST", "/v1/workers/hello", token, protocol.HelloRequest{WorkerVersion: "0.1.0", ProtocolVersion: protocol.Version, Models: []string{"smollm2:135m", "llama3.2:3b"}, Capacity: 3}, nil); err != nil {
+		if err := hello(token); err != nil {
 			return err
 		}
 	}
@@ -151,8 +172,8 @@ func run() error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				for _, token := range []string{workerA, workerB} {
-					_ = request("POST", "/v1/workers/hello", token, protocol.HelloRequest{WorkerVersion: "0.1.0", ProtocolVersion: protocol.Version, Models: []string{"smollm2:135m", "llama3.2:3b"}, Capacity: 3}, nil)
+				for _, token := range []string{workerA, workerB, workerD} {
+					_ = hello(token)
 				}
 				_ = request("GET", "/v1/jobs/fixture-missing", caller, nil, nil)
 				_ = request("POST", "/v1/jobs", "", protocol.SubmitRequest{}, nil)
