@@ -90,14 +90,17 @@ func run() error {
 		}
 	}
 	fixtureOffset = 0
+	var queuedIDs []string
+	var submitted protocol.JobStatus
 	for i := 0; i < 8; i++ {
 		model := "smollm2:135m"
 		if i == 7 {
 			model = "llama3.2:3b"
 		}
-		if err := request("POST", "/v1/jobs", caller, protocol.SubmitRequest{Model: model, Prompt: "isolated preview fixture", DeadlineMS: 600000}, nil); err != nil {
+		if err := request("POST", "/v1/jobs", caller, protocol.SubmitRequest{Model: model, Prompt: "isolated preview fixture", DeadlineMS: 600000}, &submitted); err != nil {
 			return err
 		}
+		queuedIDs = append(queuedIDs, submitted.JobID)
 	}
 	for i := 0; i < 4; i++ {
 		var assignment protocol.Assignment
@@ -114,6 +117,15 @@ func run() error {
 				return err
 			}
 		}
+		if i == 3 {
+			// One leased and one queued job show the cancelled state.
+			if err := request("POST", "/v1/jobs/"+assignment.JobID+"/cancel", caller, nil, nil); err != nil {
+				return err
+			}
+		}
+	}
+	if err := request("POST", "/v1/jobs/"+queuedIDs[6]+"/cancel", caller, nil, nil); err != nil {
+		return err
 	}
 	address := os.Getenv("QA_ADMIN_LISTEN")
 	if address == "" {
