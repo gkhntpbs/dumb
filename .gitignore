@@ -16,6 +16,8 @@ playwright-report/
 /bin/
 *.test
 *.out
+/cmd/dumb-worker/rsrc_windows_*.syso
+/cmd/dumb-tray/rsrc_windows_*.syso
 
 # Never commit keys or env
 .env

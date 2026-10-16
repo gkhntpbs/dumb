@@ -4,6 +4,10 @@
 version: 2
 project_name: dumb
 
+before:
+  hooks:
+    - go run ./scripts/windows-resources -version {{ .Version }}
+
 builds:
   - id: dumb-worker
     main: ./cmd/dumb-worker

@@ -175,19 +175,67 @@ func setupRetry(read setupRead, display *setupDisplay, err error) bool {
 	}
 }
 
-func setupCredentials(read setupRead, display *setupDisplay, validateURL func(string) error, check func(string, string) error) (string, string, error) {
+func setupCredentials(read setupRead, display *setupDisplay, validateURL func(string) error, exchange func(string, string) (string, error), check func(string, string) error) (string, string, error) {
 	for {
 		display.note("\n[1/7] Server connection")
 		display.note("Enter your server's HTTPS URL. Local tests may use http://127.0.0.1:PORT.")
-		server, err := setupValidated(read, display, "Server URL", false, validateURL)
+		server, err := setupValidated(setupDefaultRead(read, "Server URL", os.Getenv("DUMB_SERVER")), display, "Server URL", false, validateURL)
 		if err != nil {
 			return "", "", err
 		}
 		display.note("\n[2/7] Worker authentication")
-		display.note("Copy your worker token. Ctrl+V or right-click pastes; input is masked.")
-		token, err := setupValidated(read, display, "Pre-issued worker token (hidden)", true, nil)
+		method := ""
+		for method == "" {
+			value, readErr := read("Pairing code or worker token [P/T] (default P)", false)
+			if readErr != nil {
+				return "", "", readErr
+			}
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "", "p", "pair", "pairing":
+				method = "pair"
+			case "t", "token":
+				method = "token"
+			case ":exit":
+				return "", "", errSetupExit
+			default:
+				display.note("Enter P for a one-time pairing code or T for a pre-issued worker token.")
+			}
+		}
+		label := "Pre-issued worker token (hidden)"
+		if method == "pair" {
+			label = "One-time pairing code (hidden)"
+		}
+		display.note("Ctrl+V or right-click pastes; input is masked.")
+		token, err := setupValidated(read, display, label, true, nil)
 		if err != nil {
 			return "", "", err
+		}
+		if method == "pair" {
+			err = display.operation("Exchanging one-time pairing code", func() error {
+				if exchange == nil {
+					return errors.New("pairing is unavailable")
+				}
+				var exchangeErr error
+				token, exchangeErr = exchange(server, token)
+				return exchangeErr
+			})
+			if err != nil {
+				display.note("If the code was consumed or expired, generate a new pairing code in the panel.")
+				if !setupRetry(read, display, err) {
+					return "", "", errSetupExit
+				}
+				continue
+			}
+			for {
+				err = display.operation("Checking server credentials and worker version", func() error { return check(server, token) })
+				if err == nil {
+					return server, token, nil
+				}
+				display.note("The code was exchanged. Retry checks the issued worker token without exchanging the code again.")
+				if !setupRetry(read, display, err) {
+					return "", "", errSetupExit
+				}
+			}
 		}
 		err = display.operation("Checking server credentials and worker version", func() error { return check(server, token) })
 		if err == nil {
@@ -197,5 +245,19 @@ func setupCredentials(read setupRead, display *setupDisplay, validateURL func(st
 			return "", "", errSetupExit
 		}
 		display.note("Enter the server URL and token again. The window will remain open.")
+	}
+}
+
+func setupDefaultRead(read setupRead, field, value string) setupRead {
+	value = strings.TrimSpace(value)
+	return func(label string, secret bool) (string, error) {
+		if label != field || value == "" {
+			return read(label, secret)
+		}
+		result, err := read(label+" ["+value+"]", secret)
+		if err == nil && strings.TrimSpace(result) == "" {
+			return value, nil
+		}
+		return result, err
 	}
 }

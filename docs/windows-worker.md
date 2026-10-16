@@ -53,6 +53,21 @@ go test ./internal/service ./internal/menubar ./internal/worker ./internal/updat
 ./scripts/build-windows-worker.ps1
 ```
 
+The desktop build automatically embeds the official multi-size bear icon,
+an `asInvoker` GUI manifest and Windows file/product version information in
+both executables. GoReleaser uses the same resource generation step. The
+build-only tool `github.com/tc-hib/go-winres` is pinned to `v0.3.3`; its first
+run needs network access to populate the Go module cache. It is not a worker
+or server runtime dependency. Generated `rsrc_windows_amd64.syso` files are
+ignored and regenerated for the requested version. A plain `go build` does
+not generate these resources: use the desktop script or run
+`go run ./scripts/windows-resources -version 0.3.1` before cross-compiling.
+The icon comes from `internal/branding/assets/tray.ico`; no separate artwork
+is maintained for Explorer. The build does not install, sign or launch the app.
+Set `DUMB_RELEASE_PUBLIC_KEY` to a minisign public verification key before
+building to enable verification of signed updates. Leaving it empty preserves
+the development default with self-update disabled; never provide a private key.
+
 Configure `DUMB_SERVER`, `DUMB_TOKEN_FILE` and `DUMB_MODELS` in the launching
 process, or pass their equivalent flags. The admin panel shows the computer
 name unless `DUMB_WORKER_NAME` / `-name` is set; desktop onboarding saves a
@@ -70,6 +85,34 @@ startup focus/window metrics and cropped notification-area/menu screenshots,
 run `scripts/windows-tray-evidence.ps1` manually in the interactive desktop;
 `-OpenMenu` is an explicit QA action after measuring startup focus. The script
 finishes within its chosen duration and never registers a scheduled task.
+
+## First-run pairing
+
+This flow requires a worker built with this change. The previously published
+0.3.1 desktop wizard still requires an exchanged worker token; local validation
+does not release or activate the new flow.
+
+The desktop wizard accepts a one-time pairing code directly. Confirm the HTTPS
+server URL, select `P` (the default), and paste the panel's code into the hidden
+prompt. The wizard exchanges it using the existing pairing endpoint before
+checking the issued worker credential. Select `T` explicitly to use an already
+issued worker token instead. Pairing requires HTTPS even for a local fixture;
+the token alternative still permits a loopback HTTP test server.
+
+`DUMB_SERVER` and `DUMB_MODELS` provide visible defaults that require Enter to
+confirm and can be replaced at their prompts. `DUMB_WORKER_NAME` retains its
+existing saved display-name behavior. The admin panel's Windows Add worker
+command supplies these non-secret values and launches the wizard; the pairing
+code is entered only into the hidden prompt. Existing-worker re-pairing retains
+the explicit `pair` command and restricted credential-file workflow.
+
+A failed exchange never retries automatically. If the response was lost or the
+code expired, obtain a new code. After a successful exchange, Retry checks the
+issued token without consuming the code again; later model/setup retries retain
+that token in memory. The existing installation path writes it under the
+restricted per-user root and applies the token ACL. Exiting before installation
+discards the token; restart with a fresh code. Setup never prints the code or
+token or copies the issued token to the clipboard.
 
 ## Manual setup against a local test server
 

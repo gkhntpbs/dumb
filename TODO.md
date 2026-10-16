@@ -4,6 +4,9 @@ Status: `[ ]` to do · `[~]` partial / investigating · `[x]` done
 
 ---
 
+## Windows onboarding
+- [x] Accept a one-time pairing code directly in desktop setup, preserve explicit pre-issued token setup, retain the issued token during verification/setup retries, and confirm server/model environment defaults. Verify: `go test -count=1 -run 'TestSetup|TestPair' ./cmd/dumb-worker`; see `docs/qa/windows-pairing-2026-10-16.md`. Release/deployment and production onboarding acceptance remain separate.
+
 ## Protocol
 - [x] Define the worker protocol in `docs/protocol/openapi.yaml`: `GET /v1/jobs/next?wait=` (long-poll), `POST /v1/jobs/{id}/result`, worker hello (version, models, capacity). → verify: spec validates; Go types in `internal/protocol` match it.
 - [x] Define the caller API: submit a job, wait for its result with a deadline. → verify: spec validates.

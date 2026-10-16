@@ -133,20 +133,23 @@ func desktopSetup(ctx context.Context, root string) int {
 	display.note("Seven steps connect this computer and prepare a tray worker.")
 	display.note("Paste with Ctrl+V or right-click; press Enter to confirm each field.")
 	display.note("Type :exit at a prompt to stop. Errors keep this window open.")
+	var server, token string
 	for {
-		server, token, err := setupCredentials(read, display, func(value string) error { _, err := worker.CheckServerURL(value); return err }, func(server, token string) error { return desktopCredential(ctx, server, token) })
-		if errors.Is(err, errSetupExit) {
-			return exitOK
-		}
-		if err != nil {
-			if setupRetry(read, display, err) {
-				continue
+		if token == "" {
+			server, token, err = setupCredentials(read, display, func(value string) error { _, err := worker.CheckServerURL(value); return err }, func(server, code string) (string, error) { return exchangePair(ctx, http.DefaultClient, server, code) }, func(server, token string) error { return desktopCredential(ctx, server, token) })
+			if errors.Is(err, errSetupExit) {
+				return exitOK
 			}
-			return exitError
+			if err != nil {
+				if setupRetry(read, display, err) {
+					continue
+				}
+				return exitError
+			}
 		}
 		display.note("\n[3/7] Models to run")
 		display.note("Enter Ollama model names, separated by commas. Example: smollm2:135m")
-		models, err := setupValidated(read, display, "Ollama models (comma-separated)", false, func(value string) error {
+		models, err := setupValidated(setupDefaultRead(read, "Ollama models (comma-separated)", os.Getenv("DUMB_MODELS")), display, "Ollama models (comma-separated)", false, func(value string) error {
 			if len((&config{models: value}).modelList()) == 0 {
 				return errors.New("Enter at least one model name")
 			}

@@ -12,7 +12,7 @@ const base=process.env.QA_ADMIN_URL||'http://127.0.0.1:52147';
 const baseOff=process.env.QA_ADMIN_URL_OFF;assert.ok(baseOff,'QA_ADMIN_URL_OFF is required');
 const publicURL='https://dumb.example.com';
 const password=process.env.QA_ADMIN_PASSWORD||readFileSync(process.env.QA_ADMIN_PASSWORD_FILE,'utf8').trim();
-const out=fileURLToPath(new URL('../../docs/qa/add-worker-2026-10-15/',import.meta.url));
+const out=fileURLToPath(new URL('../../docs/qa/add-worker-pairing-2026-10-16/',import.meta.url));
 const browser=await chromium.launch({executablePath:process.env.CHROME_BIN,headless:true});
 const errors=[],logs=[],pages=[];
 async function open(url,viewport={width:1440,height:1000}){
@@ -59,16 +59,18 @@ try{
   const first=await page.locator('#pairing-countdown').textContent();assert.match(first,/^Expires in (10:00|9:5\d)/);
   await page.clock.fastForward(3000);const later=await page.locator('#pairing-countdown').textContent();assert.notEqual(later,first,'countdown moves');assert.match(later,/^Expires in 9:5\d/);
   const shots={linux:'generated-linux.png',macos:'generated-macos.png',windows:'generated-windows.png'};
-  const want={linux:[/^curl -fsSLO https:\/\/raw\.githubusercontent\.com\/gkhntpbs\/dumb\/main\/scripts\/install\.sh$/,/^sudo sh install\.sh -system -server 'https:\/\/dumb\.example\.com' -models '[^']+' -name 'Kitchen Pi 5' -pair-code-stdin$/],macos:[/\.\/dumb-worker pair -server 'https:\/\/dumb\.example\.com' -token-file "\$HOME\/Library\/Application Support\/DUMB\/worker-token"$/,/^\.\/dumb-worker service install -server 'https:\/\/dumb\.example\.com' -token-file .* -name 'Kitchen Pi 5'$/],windows:[/Read-Host 'Pairing code' -AsSecureString[\s\S]*\.\\dumb-worker\.exe pair -server 'https:\/\/dumb\.example\.com' -token-file \$Token/,/\$env:DUMB_WORKER_NAME = 'Kitchen Pi 5'\n\.\\dumb-worker\.exe$/]};
+  const want={linux:[/^curl -fsSLO https:\/\/raw\.githubusercontent\.com\/gkhntpbs\/dumb\/main\/scripts\/install\.sh$/,/^sudo sh install\.sh -system -server 'https:\/\/dumb\.example\.com' -models '[^']+' -name 'Kitchen Pi 5' -pair-code-stdin$/],macos:[/\.\/dumb-worker pair -server 'https:\/\/dumb\.example\.com' -token-file "\$HOME\/Library\/Application Support\/DUMB\/worker-token"$/,/^\.\/dumb-worker service install -server 'https:\/\/dumb\.example\.com' -token-file .* -name 'Kitchen Pi 5'$/],windows:[/\$env:DUMB_SERVER = 'https:\/\/dumb\.example\.com'\n\$env:DUMB_MODELS = '[^']+'\n\$env:DUMB_WORKER_NAME = 'Kitchen Pi 5'\n\.\\dumb-worker\.exe$/]};
   for(const os of ['linux','macos','windows']){
     await page.locator(`#pairing-tab-${os}`).click();assert.equal(await page.locator(`#pairing-tab-${os}`).getAttribute('aria-selected'),'true');
-    const cmds=await commandTexts(page),raw=await rawCommands(page);assert.equal(cmds.length,2,os);want[os].forEach((re,i)=>assert.match(cmds[i],re,`${os} step ${i+1}`));
+    const cmds=await commandTexts(page),raw=await rawCommands(page);assert.equal(cmds.length,want[os].length,os);want[os].forEach((re,i)=>assert.match(cmds[i],re,`${os} step ${i+1}`));
     for(const c of raw)assert.ok(!c.includes(code),`${os}: code on a command line`);
+    if(os==='windows'){assert.doesNotMatch(raw.join(' '),/Set-Clipboard|pairing-token|token-file/);assert.match(await page.locator('#pairing-commands').textContent(),/Choose Pairing code/);}
     await assertFits(page,`${os} tab`);
     await page.locator('#pairing').screenshot({path:out+shots[os]});
-    const buttons=page.locator('#pairing-commands .command-head button');assert.equal(await buttons.count(),2);
-    for(let i=0;i<2;i++){await buttons.nth(i).click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),raw[i],`${os} copy ${i+1}`);}
+    const buttons=page.locator('#pairing-commands .command-head button');assert.equal(await buttons.count(),want[os].length);
+    for(let i=0;i<want[os].length;i++){await buttons.nth(i).click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),raw[i],`${os} copy ${i+1}`);}
   }
+  await page.setViewportSize({width:390,height:844});await assertFits(page,'mobile Windows first-run setup');await page.locator('#pairing').evaluate(d=>d.scrollTop=d.scrollHeight);await page.screenshot({path:out+'generated-windows-mobile.png'});await page.setViewportSize({width:1440,height:1000});
   await page.locator('#pairing-copy-code').click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),code,'copy code');
   assert.equal(await page.locator('#pairing-copy-code').textContent(),'Copied');
   await page.locator('#pairing-tab-linux').focus();await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#pairing-tab-macos').getAttribute('aria-selected'),'true','arrow keys move between tabs');
