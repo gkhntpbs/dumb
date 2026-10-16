@@ -14,7 +14,45 @@ permissions:
   contents: write
 
 jobs:
+  macos-app:
+    runs-on: macos-14
+    strategy:
+      matrix:
+        arch: [arm64, amd64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.0.0
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - name: Locked caller tooling
+        run: |
+          npm install --global npm@11.12.1
+          npm ci --prefix clients/typescript --ignore-scripts
+      - name: Download locked Go modules
+        run: go mod download
+      - name: macOS native build gate
+        run: ./qa-automation/scripts/build-gate.sh
+      - name: Build macOS worker application
+        env:
+          DUMB_BUILD_ARCH: ${{ matrix.arch }}
+          DUMB_MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+        run: |
+          test -n "$DUMB_MINISIGN_PUBLIC_KEY"
+          export DUMB_BUILD_VERSION="${GITHUB_REF_NAME#v}"
+          export DUMB_BUILD_ZIP="$PWD/dist/dumb-worker-app_${DUMB_BUILD_VERSION}_darwin_${DUMB_BUILD_ARCH}.zip"
+          ./scripts/build-macos-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-app-${{ matrix.arch }}
+          path: dist/dumb-worker-app_*.zip
+          if-no-files-found: error
   release:
+    needs: macos-app
     runs-on: ubuntu-latest
     env:
       DUMB_RELEASE_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
@@ -55,6 +93,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: macos-app-*
+          path: dist
+          merge-multiple: true
+
+      - name: Add macOS application checksums
+        run: |
+          cd dist
+          sha256sum dumb-worker-app_*.zip >> checksums.txt
+
       - name: Install minisign
         run: sudo apt-get update && sudo apt-get install -y minisign
 
@@ -77,5 +126,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" dist/checksums.txt.minisig
+          gh release upload "$GITHUB_REF_NAME" dist/dumb-worker-app_*.zip dist/checksums.txt dist/checksums.txt.minisig --clobber
           gh release edit "$GITHUB_REF_NAME" --draft=false

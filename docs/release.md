@@ -8,7 +8,9 @@
 2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0` (a pre-release is
    `v0.2.0-beta.1`). Only on an explicit decision; nothing pushes automatically.
 3. `.github/workflows/release.yaml` then runs the gate again, builds with
-   GoReleaser 2.18.3 (`.goreleaser.yaml`) into a **draft** release, signs
+   GoReleaser 2.18.3 (`.goreleaser.yaml`) into a **draft** release, builds native
+   macOS worker applications for Apple silicon and Intel, adds their SHA-256
+   entries to the same manifest, signs
    `checksums.txt` with minisign, checks that signature against the public key,
    uploads `checksums.txt.minisig` and only then publishes the release.
    goreleaser marks tags with a pre-release suffix as GitHub pre-releases.
@@ -115,16 +117,42 @@ Exit code **4** means "restart me now". launchd (`KeepAlive`, `ThrottleInterval`
 10 s: immediate when the process ran at least 10 s), systemd (`Restart=always`,
 5 s) and the Windows service (`sc.exe failure` restart actions) all restart it.
 
-## Local macOS application
+## macOS worker application
 
-`./scripts/build-macos-app.sh` builds the menu-bar application locally without
-publishing. Its native helper is not part of the current GoReleaser CLI
-archives and is never overwritten by the signed Go binary updater. Signed
-helper distribution, notarization and tagged native application packaging
-remain pending. See [macos-menu-bar.md](macos-menu-bar.md).
+The release includes `dumb-worker-app_<version>_darwin_arm64.zip` for Apple
+silicon and `dumb-worker-app_<version>_darwin_amd64.zip` for Intel. Each archive
+contains `DUMB Worker.app`, its Go worker, native AppKit helper and icon resources.
+The application archives are covered by the same minisign-verified checksum
+manifest as the CLI archives. The standalone CLI signed updater continues to use the CLI archive names.
+Binary-only self-updates are disabled inside the desktop application to preserve
+the sealed bundle signature. Quit the worker and replace the complete app to
+update it. An upgrade-required server response stops claims and shows an upgrade
+error until the newer application is installed.
+
+Build locally on macOS:
+
+```sh
+DUMB_BUILD_VERSION=0.3.3 DUMB_BUILD_ARCH=arm64 \
+DUMB_MINISIGN_PUBLIC_KEY="$DUMB_RELEASE_PUBLIC_KEY" \
+DUMB_BUILD_ZIP="$PWD/dist/dumb-worker-app_0.3.3_darwin_arm64.zip" \
+./scripts/build-macos-app.sh
+```
+
+`DUMB_BUILD_ARCH` accepts `arm64` or `amd64` and defaults to the host Go
+architecture. `DUMB_BUILD_ZIP` is optional and refuses an existing archive.
+Both the helper and Go executable are ad-hoc code signed, then the bundle
+signature and property lists are verified before activation. Ad-hoc signing
+provides local code integrity; these builds have no Apple Developer ID signature
+or notarization. Gatekeeper acceptance for quarantined downloads is not covered
+by local builds. See [macos-worker.md](macos-worker.md).
+
+macOS setup, native lifecycle and packaging acceptance are recorded in
+[macos-worker-2026-10-16.md](qa/macos-worker-2026-10-16.md).
 
 Local prerelease packaging evidence and remaining platform limitations are in
 [release-preflight-2026-10-15.md](qa/release-preflight-2026-10-15.md). The snapshot
-archive verifier is `qa-automation/scripts/check-release-archives.py DIST PUBLIC_KEY`.
+archive verifier is `qa-automation/scripts/check-release-archives.py DIST PUBLIC_KEY`. Add
+`--version VERSION --commit COMMIT --require-apps` to verify a published release
+with both native application archives.
 It checks packaging and embedded public metadata; real signature/update/rollback
 acceptance must use the published release assets.

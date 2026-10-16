@@ -9,7 +9,7 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.dumb.worker.menu</string>
 	<key>CFBundleName</key>
-	<string>DUMB Menu</string>
+	<string>DUMB Worker</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleVersion</key>

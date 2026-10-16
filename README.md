@@ -173,8 +173,10 @@ TOKEN="$HOME/Library/Application Support/DUMB/worker-token"
 
 The service runs `dumb-worker` from this folder, so keep the binary where it is.
 
-A native menu bar app with Pause, Resume and Quit can be built locally with
-`./scripts/build-macos-app.sh` ([macos-menu-bar.md](docs/macos-menu-bar.md)).
+The native DUMB Worker app provides first-run pairing or token setup, optional
+start at login, and Pause, Resume and Quit. Download its architecture-specific
+application ZIP from Releases or build locally with
+`./scripts/build-macos-app.sh` ([macos-worker.md](docs/macos-worker.md)).
 </details>
 
 <details>
@@ -235,7 +237,7 @@ between minor versions. Open work is tracked in [TODO.md](TODO.md).
 | Linux one-command install and `install.sh` | [linux-install.md](docs/linux-install.md) |
 | Running the worker as a service (launchd, systemd, Windows) | [service.md](docs/service.md) |
 | Windows desktop worker and tray | [windows-worker.md](docs/windows-worker.md) |
-| macOS menu bar worker | [macos-menu-bar.md](docs/macos-menu-bar.md) |
+| macOS worker | [macos-worker.md](docs/macos-worker.md) |
 | Pairing a worker | [worker-pairing.md](docs/worker-pairing.md) |
 | Credentials and the Add worker / Re-pair flow | [credential-management.md](docs/credential-management.md) |
 | Ollama on another machine of the private network | [remote-ollama.md](docs/remote-ollama.md) |

@@ -136,7 +136,7 @@ tests, packed independent consumers and real Go HTTP-server integration. Run
 
 The local menu-bar application is built with `./scripts/build-macos-app.sh` on macOS.
 Lifecycle, headless CLI opt-in and native verification are documented in
-`docs/macos-menu-bar.md`.
+`docs/macos-worker.md`.
 
 Windows desktop builds use `./scripts/build-windows-worker.ps1`; the portable
 `dumb-worker.exe` includes its native tray; `dumb-tray.exe` remains an optional

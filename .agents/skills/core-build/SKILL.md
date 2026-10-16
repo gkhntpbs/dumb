@@ -24,6 +24,16 @@ go build ./...
 npm --prefix clients/typescript run build
 if [ "$(uname -s)" = Darwin ]; then ./scripts/build-macos-app.sh; fi
 ```
+For macOS, `DUMB_BUILD_ARCH` selects `arm64` or `amd64` (default: host),
+`DUMB_BUILD_VERSION` sets the existing version, `DUMB_MINISIGN_PUBLIC_KEY` embeds
+the public updater verification key, and optional `DUMB_BUILD_ZIP` writes a new
+application ZIP. Never pass a private signing key to the build. The script ad-hoc
+signs the Go executable, native helper and application bundle and verifies the
+bundle signature and property lists. Ad-hoc signing does not provide Developer
+ID signing or notarization. For a release build, produce both architectures and
+verify each archive against the signed checksum manifest with
+`qa-automation/scripts/check-release-archives.py DIST PUBLIC_KEY --version VERSION --commit COMMIT --require-apps`.
+
 Confirm the output exists (path + size); for a signed artefact, verify the signature.
 - On a signing or credential error, never report success; say exactly what is missing.
 - If the version needs raising, **ask** — never raise it automatically.

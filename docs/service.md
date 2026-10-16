@@ -129,7 +129,7 @@ it online at once. Not after `401` / `426` (the server would refuse it too) or
 ## macOS menu control
 
 The local menu-bar application and headless CLI opt-in are documented in
-[macos-menu-bar.md](macos-menu-bar.md). New launchd templates restart only
+[macos-worker.md](macos-worker.md). New launchd templates restart only
 unsuccessful exits (`KeepAlive: {SuccessfulExit: false}`). Menu Quit drains jobs
 and exits successfully, so it remains stopped until next login or explicit
 start. Update exit 4 and crashes still restart. Existing installed plists are

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -125,6 +126,34 @@ func TestNativeHelperProtocol(t *testing.T) {
 	}
 	if output, err := exec.CommandContext(ctx, binary, "--self-test").CombinedOutput(); err != nil {
 		t.Fatalf("native protocol: %v: %s", err, output)
+	}
+	if output, err := exec.CommandContext(ctx, binary, "--setup-self-test").CombinedOutput(); err != nil {
+		t.Fatalf("native setup protocol: %v: %s", err, output)
+	}
+	for _, test := range []struct {
+		name  string
+		input string
+		valid bool
+	}{
+		{name: "valid_eof", input: `{"server":"https://example.invalid","models":"model","error":""}`, valid: true},
+		{name: "valid_newline_eof", input: "{}\n", valid: true},
+		{name: "exact_limit", input: `{"error":"` + strings.Repeat("x", 16372) + `"}`, valid: true},
+		{name: "over_limit", input: `{"error":"` + strings.Repeat("x", 16373) + `"}`},
+		{name: "empty_eof"},
+		{name: "malformed", input: "{"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := exec.CommandContext(ctx, binary, "--setup-input-self-test")
+			command.Stdin = strings.NewReader(test.input)
+			output, err := command.CombinedOutput()
+			if test.valid {
+				if err != nil || string(output) != "Native setup input passed\n" {
+					t.Fatalf("native setup input rejected: %v: %s", err, output)
+				}
+			} else if err == nil {
+				t.Fatalf("native setup input accepted: %s", output)
+			}
+		})
 	}
 }
 

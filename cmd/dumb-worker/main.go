@@ -299,6 +299,8 @@ func cmdRun(ctx context.Context, c *config, logger *log.Logger) int {
 	switch {
 	case err != nil:
 		logger.Printf("update: cannot locate this binary (%v); self-update disabled", err)
+	case !binaryUpdatesAllowed(runtime.GOOS, exe):
+		logger.Print("update: download a new macOS application from Releases; binary-only updates are disabled to preserve the application signature")
 	case update.PublicKey == "":
 		logger.Print(update.ErrDisabled)
 	default:
@@ -309,7 +311,7 @@ func cmdRun(ctx context.Context, c *config, logger *log.Logger) int {
 				HTTP: &http.Client{Timeout: 10 * time.Minute}},
 		}
 	}
-	if err == nil {
+	if err == nil && binaryUpdatesAllowed(runtime.GOOS, exe) {
 		// Probation applies even with updates disabled: a rollback needs no key.
 		p, perr := update.Startup(exe, version, update.DefaultWindow, update.DefaultMaxAttempts, logger)
 		if errors.Is(perr, update.ErrRestart) {
@@ -512,4 +514,8 @@ func (c *config) addOllamaEnvironment(envs map[string]string) {
 // host with the explicit remote opt-in.
 func (c *config) ollamaClient() (*ollama.Client, error) {
 	return ollama.Open(c.ollamaURL, c.ollamaRemote)
+}
+
+func binaryUpdatesAllowed(goos, executable string) bool {
+	return goos != "darwin" || !strings.HasSuffix(filepath.ToSlash(executable), ".app/Contents/MacOS/dumb-worker")
 }

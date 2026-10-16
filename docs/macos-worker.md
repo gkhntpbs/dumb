@@ -1,36 +1,57 @@
-# macOS menu bar worker
+# macOS worker
 
-The local macOS application uses a Go worker and a small native AppKit helper.
-It creates only an icon in the menu bar. Both bundles declare `LSUIElement` and
-the helper uses the accessory activation policy. There are no application
-windows, Dock controls, dialogs, notifications or foreground activation calls.
-Windows tray work remains deferred.
+Download the matching Apple Silicon (`arm64`) or Intel (`amd64`) application ZIP
+from GitHub Releases, extract **DUMB Worker.app**, and move it to a writable
+Applications folder before opening it. macOS 13 or later is required.
 
-Build locally on macOS with the installed Go and Swift compiler:
+The first launch opens a native setup form. Enter the HTTPS server URL, choose
+**Pairing code** or **Worker token**, paste the credential and enter the Ollama
+model names separated by commas. Pairing codes are redeemed once. After a
+successful exchange, connection and save retries retain the issued credential
+in memory instead of consuming the code again. Cancel discards it.
+
+**Start at login** registers this user's `com.dumb.worker.desktop` launch agent.
+Its definition does not contain credentials. Existing startup entries are never
+overwritten. Without this option, the application runs for the current session.
+The menu appears while Ollama and the models are prepared; Ready requires the
+actual worker hello, local API and configured models. Setup may install the
+official Ollama package when no installation exists. An existing external
+Ollama process remains unmanaged. No inbound worker listener is opened.
+
+Configuration, restricted token, process lock and logs are stored under
+`~/Library/Application Support/DUMB/Worker/`. Keep this directory private.
+Quit stops the worker until the next login or explicit application launch.
+Pause drains active jobs before allowing Resume. Launching an already running
+application does not create another worker.
+
+Install desktop updates by quitting the worker and replacing the whole app
+with the newer release. Binary-only self-updates are disabled inside the app
+to preserve its sealed code signature; standalone CLI self-updates remain enabled.
+If the server requires a newer worker, the menu shows an upgrade error and
+claims stop until the application is replaced.
+
+The native setup form intentionally appears only during first-run setup or
+setup errors. Normal operation remains a menu icon without Dock or application
+windows. The display name is **DUMB Worker**, including its native helper.
+The isolated development preview remains a separate fixture.
+
+Build locally:
 
 ```sh
 GOMAXPROCS=2 GOMEMLIMIT=256MiB ./scripts/build-macos-app.sh
 ```
 
-The output is `dist/DUMB Worker.app`. Repeated builds replace only an output
-carrying the exact local-build ownership marker; unmarked outputs and symlinks
-are refused. Compilation happens in a newly created sibling staging directory.
-`DUMB_BUILD_VERSION` defaults to `0.0.0`; a release version may be supplied
-explicitly. This creates a local build, not a signed or notarized distribution.
-The existing GoReleaser archives still contain CLI binaries. Native helper
-signing, notarization and release packaging remain pending.
+The output defaults to `dist/DUMB Worker.app`. `DUMB_BUILD_VERSION` sets the
+version; `DUMB_BUILD_ARCH=arm64` or `amd64` selects the architecture. Release
+packaging includes an ad-hoc code signature, which protects bundle integrity
+but does not provide an Apple Developer ID or notarization. GitHub checksums
+are separately signed with the worker's minisign release key. Gatekeeper may
+require explicit approval for this distribution; no system protection is disabled.
 
-Configuration uses the existing worker flags/environment and mode-0600 token
-file. With pairing enabled on the server, the admin panel's **Devices > Add
-worker** dialog shows the macOS commands: `dumb-worker pair` (hidden code
-prompt) writes the token to `~/Library/Application Support/DUMB/worker-token`,
-then `dumb-worker service install` uses it; **Re-pair worker** replaces that
-file and restarts the agent with `launchctl kickstart -k`. Run the application's `Contents/MacOS/dumb-worker` with these settings, or
-use its `service install` command to generate the existing launchd configuration.
-No service is installed by the build. An unbundled macOS CLI intentionally uses
-`run -headless` or `DUMB_HEADLESS=1`; development and command-line QA scripts opt
-in explicitly. Linux and Windows remain headless. No credential, server address,
-prompt, model name or raw error is sent to the helper.
+Existing command-line flags and `run -headless` remain available for explicit
+CLI use. A CLI archive is separate from the desktop app. Legacy CLI launchd
+configuration remains supported. Do not run a legacy CLI worker and the desktop
+worker with the same identity at the same time.
 
 The menu shows actual readiness, recovery, active job count and lifecycle.
 Backend recovery failures show an error category; fatal credentials and upgrade
@@ -54,9 +75,8 @@ count. Input is bounded to 4096 bytes, controls are bounded and unknown controls
 are rejected. Missing, incompatible or dead helpers stop new claims and drain
 active jobs. The worker then remains stopped until process shutdown, without
 retrying the helper in a loop. A probationary new binary rolls back when helper
-startup fails. The existing signed updater replaces only the Go executable;
-it never replaces the native helper. A helper protocol change needs an explicit
-compatible application distribution.
+startup fails. The standalone CLI signed updater replaces only the Go executable. Desktop
+updates require a complete compatible application distribution.
 
 Verify without host Ollama or native installers:
 
@@ -105,7 +125,7 @@ and screenshot acceptance remain separate from this automated evidence.
 ## Uncoil development preview
 
 Run `./scripts/menu-preview.sh` from this repository, or start the workspace's
-`DUMB worker — Menu bar preview` Uncoil run configuration. This compiles the existing
+`DUMB Worker — Isolated preview` Uncoil run configuration. This compiles the existing
 sealed queue/recovery fixture and starts the actual native helper. It accepts
 menu Pause, Resume and Quit, and terminal input `pause`, `resume` and `quit`.
 Terminal input `error`, `updating` and `ready` injects display states only.
