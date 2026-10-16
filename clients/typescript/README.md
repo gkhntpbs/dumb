@@ -70,7 +70,7 @@ that submitted the job can cancel it; others receive 404.
 
 `execute` submits once and polls that job until it finishes or the configured
 budget expires. Its budget is the smaller of `deadline_ms` and optional
-`hedgeMs`. A done job returns `{ source: "dumb", output, job }`. An injected
+`hedgeMs`. A done job returns `{ source: "dumb", output, thinking?, done_reason?, job }`. An injected
 fallback runs for no-worker HTTP 503 immediately, failed/expired jobs, or an
 elapsed local hedge/deadline budget, returning `{ source: "fallback", value,
 reason }`. Without a fallback these conditions throw `JobError`. The fallback
@@ -133,3 +133,16 @@ one minute after the job finishes or expires. Reusing a key after retention
 creates new work. Durable servers preserve the mapping across process restart;
 explicit volatile servers do not. The client never generates keys or retries
 implicitly. See `../../docs/durable-queue.md` for storage and recovery semantics.
+
+Pass `think: false` in the job request to disable thinking on a supported model,
+for example `{ model: "qwen3:4b", prompt: "Say hello", think: false, deadline_ms: 60000 }`.
+`think: true` enables thinking; omitting the field preserves the backend default.
+Named thinking levels are not supported. Explicit thinking control requires an
+online worker advertising the `think` capability; otherwise admission returns 503.
+
+Reasoning is returned separately as `result.thinking`, never appended to `output`.
+A successful job may contain only reasoning when the generation budget is exhausted.
+Inspect `done_reason` (for example `length`) to detect backend truncation; the
+128-token ceiling applies to generation including reasoning. The combined result
+text and metadata must fit the protocol's 1 MiB result budget. This API remains
+non-streaming prompt generation; chat history and tool calling are not added here.

@@ -49,12 +49,12 @@ func Open(limits Limits, cfg StoreConfig, now func() time.Time) (*Queue, error) 
 			return nil, ErrStorage
 		}
 		orders[r.Order] = true
-		j := &job{diskCharge: r.Allocation, id: r.ID, owner: r.Owner, key: r.Key, digest: r.Digest, req: r.Request, created: r.Created, leased: r.Leased, deadline: r.Deadline, retainUntil: r.RetainUntil, ackDue: r.AckDue, state: r.State, leaseID: r.LeaseID, workerID: r.WorkerID, output: r.Output, err: r.Error, acked: r.Acked, order: r.Order, done: make(chan struct{})}
+		j := &job{diskCharge: r.Allocation, id: r.ID, owner: r.Owner, key: r.Key, digest: r.Digest, req: r.Request, created: r.Created, leased: r.Leased, deadline: r.Deadline, retainUntil: r.RetainUntil, ackDue: r.AckDue, state: r.State, leaseID: r.LeaseID, workerID: r.WorkerID, output: r.Output, err: r.Error, thinking: r.Thinking, doneReason: r.DoneReason, acked: r.Acked, order: r.Order, done: make(chan struct{})}
 		j.bytes = requestBytes(j.owner, j.req.Model, j.req.Prompt, j.req.System, j.req.Format)
 		if active(j) {
 			j.bytes += MaxResultBytes
 		} else {
-			j.bytes += len(j.output) + len(j.err)
+			j.bytes += len(j.output) + len(j.err) + len(j.thinking) + len(j.doneReason)
 			close(j.done)
 		}
 		if j.key != "" {
@@ -226,7 +226,8 @@ func (q *Queue) prepareTerminalAt(j *job, finished time.Time) job {
 	next.req.System = ""
 	next.req.Format = ""
 	next.req.NumPredict = 0
-	next.bytes = len(next.owner) + len(next.req.Model) + len(next.output) + len(next.err)
+	next.req.Think = nil
+	next.bytes = len(next.owner) + len(next.req.Model) + len(next.output) + len(next.err) + len(next.thinking) + len(next.doneReason)
 	if next.state == protocol.StateExpired {
 		finished = next.deadline
 	}

@@ -358,3 +358,42 @@ test("a job cancelled elsewhere ends execute with JobError and never runs the fa
   await assert.rejects(c.execute(request, { fallback: async () => { fallback++; return "x"; } }), error => error instanceof JobError && error.reason === "cancelled" && error.job.state === "cancelled");
   assert.equal(fallback, 0);
 });
+
+for (const think of [undefined, false, true]) {
+  test(`thinking control ${think} is preserved without merging reasoning`, async () => {
+    const input = { ...request, ...(think === undefined ? {} : { think }) };
+    const c = client(async (_url, init) => {
+      const body = JSON.parse(init.body);
+      assert.equal(Object.hasOwn(body, "think"), think !== undefined);
+      assert.equal(body.think, think);
+      return response(200, job("done", { output: "answer", thinking: "reason", done_reason: "stop" }));
+    });
+    const result = await c.execute(input);
+    assert.equal(result.output, "answer");
+    assert.equal(result.thinking, "reason");
+    assert.equal(result.done_reason, "stop");
+    assert.equal(result.job.thinking, "reason");
+  });
+}
+
+test("reasoning-only completion retains length metadata and empty output", async () => {
+  const c = client(async () => response(200, job("done", { thinking: "reason", done_reason: "length" })));
+  const result = await c.execute({ ...request, think: true });
+  assert.equal(result.output, "");
+  assert.equal(result.thinking, "reason");
+  assert.equal(result.done_reason, "length");
+});
+
+test("non-boolean thinking controls fail before fetching", async () => {
+  const c = client(async () => { throw new Error("must not fetch"); });
+  for (const think of ["high", "false", null, 0]) {
+    await assert.rejects(c.execute({ ...request, think }), TypeError);
+  }
+});
+
+for (const field of ["thinking", "done_reason"]) {
+  test(`invalid ${field} metadata is rejected`, async () => {
+    const c = client(async () => response(200, job("done", { output: "answer", [field]: 42 })));
+    await assert.rejects(c.execute(request), ProtocolError);
+  });
+}

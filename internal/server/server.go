@@ -24,8 +24,9 @@ import (
 	"github.com/gkhntpbs/dumb/internal/queue"
 )
 
-// MaxBodyBytes bounds every request body.
 const MaxBodyBytes = 1 << 20
+
+const MaxResultBodyBytes = 6*protocol.MaxResultBytes + (64 << 10)
 
 // DefaultAckWindow is Config.AckWindow's default.
 const DefaultAckWindow = 2 * time.Second
@@ -70,6 +71,7 @@ type worker struct {
 	capacity int
 	lastSeen time.Time
 	polling  int
+	think    bool
 	ack      bool          // announced protocol.FeatureAck
 	gone     chan struct{} // closed by goodbye: aborts this worker's polls
 }
@@ -224,7 +226,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(RequestIDHeader, id)
 	l := s.log.With("request_id", id)
 	r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, l))
-	r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
+	bodyLimit := int64(MaxBodyBytes)
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/jobs/") && strings.HasSuffix(r.URL.Path, "/result") {
+		bodyLimit = MaxResultBodyBytes
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 	sw := &statusWriter{ResponseWriter: w}
 	route := apiRoute(r)
 	s.api.begin(route)
@@ -339,6 +345,7 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request, p auth.Principal)
 	wk.name = protocol.NormalizeWorkerName(req.WorkerName)
 	name := wk.name
 	wk.ack = slices.Contains(req.Features, protocol.FeatureAck)
+	wk.think = slices.Contains(req.Features, protocol.FeatureThink)
 	s.mu.Unlock()
 	s.reqLog(r).Info("worker hello", "worker", p.ID, "worker_name", name, "worker_version", req.WorkerVersion, "models", req.Models,
 		"capacity", req.Capacity, "features", req.Features)
@@ -386,6 +393,10 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal)
 		return
 	}
 	models, capacity, needAck := wk.models, wk.capacity, wk.ack
+	features := []string{}
+	if wk.think {
+		features = append(features, protocol.FeatureThink)
+	}
 	wk.polling++
 	wk.lastSeen = s.cfg.Now()
 	s.mu.Unlock()
@@ -411,7 +422,7 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, p auth.Principal)
 	if needAck {
 		ackWindow = s.cfg.AckWindow
 	}
-	a, err := s.q.ClaimWithAck(ctx, p.ID, models, capacity, ackWindow)
+	a, err := s.q.ClaimWithFeatures(ctx, p.ID, models, capacity, ackWindow, features)
 	switch {
 	case err != nil:
 		writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -486,19 +497,19 @@ func (s *Server) result(w http.ResponseWriter, r *http.Request, p auth.Principal
 		writeError(w, http.StatusBadRequest, "lease_id is required")
 		return
 	}
-	if req.Output != "" && req.Error != "" {
+	if (req.Output != "" || req.Thinking != "" || req.DoneReason != "") && req.Error != "" {
 		writeError(w, http.StatusBadRequest, "send output or error, not both")
 		return
 	}
 	s.touch(p.ID)
 	id := r.PathValue("id")
-	if err := s.q.Complete(id, req.LeaseID, p.ID, req.Output, req.Error); err != nil {
+	if err := s.q.CompleteResult(id, p.ID, req); err != nil {
 		s.reqLog(r).Info("result refused", "job_id", id, "worker", p.ID, "err", err)
 		code := http.StatusConflict
 		if errors.Is(err, queue.ErrStorage) || errors.Is(err, queue.ErrStorageCapacity) {
 			code = http.StatusServiceUnavailable
 		}
-		if errors.Is(err, queue.ErrResultTooLarge) {
+		if errors.Is(err, queue.ErrResultTooLarge) || errors.Is(err, queue.ErrResultInvalid) {
 			code = http.StatusBadRequest
 		}
 		writeError(w, code, err.Error())
@@ -550,8 +561,12 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request, p auth.Principal
 	}
 	id, replayed, err := s.q.Replay(p.ID, key, req)
 	if err == nil && !replayed {
-		if !slices.Contains(s.Status().Models, req.Model) {
-			writeError(w, http.StatusServiceUnavailable, "no online worker serves "+req.Model)
+		if !s.canServe(req.Model, req.Think != nil) {
+			message := "no online worker serves " + req.Model
+			if req.Think != nil {
+				message = "no online worker supports think for " + req.Model
+			}
+			writeError(w, http.StatusServiceUnavailable, message)
 			return
 		}
 		id, err = s.q.SubmitKey(p.ID, key, req)
@@ -704,3 +719,15 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func (s *Server) Close() error { return s.q.Close() }
+
+func (s *Server) canServe(model string, think bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.cfg.Now()
+	for _, wk := range s.workers {
+		if (wk.polling > 0 || now.Sub(wk.lastSeen) <= s.cfg.OnlineTTL) && slices.Contains(wk.models, model) && (!think || wk.think) {
+			return true
+		}
+	}
+	return false
+}

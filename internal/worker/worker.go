@@ -486,7 +486,7 @@ func (w *Worker) sleep(ctx context.Context, attempt int) error {
 func (w *Worker) hello(ctx context.Context, models []string) error {
 	req := protocol.HelloRequest{
 		WorkerVersion: w.cfg.Version, WorkerName: w.cfg.Name, ProtocolVersion: protocol.Version,
-		Models: models, Capacity: w.cfg.Capacity, Features: []string{protocol.FeatureAck},
+		Models: models, Capacity: w.cfg.Capacity, Features: w.features(),
 	}
 	for attempt := 0; ; attempt++ {
 		var res protocol.HelloResponse
@@ -743,7 +743,16 @@ func (w *Worker) runJob(ctx context.Context, a protocol.Assignment) {
 	if limit < 1 || limit > protocol.MaxNumPredict {
 		limit = protocol.MaxNumPredict
 	}
-	out, err := w.gen.Generate(jctx, ollama.GenerateRequest{Model: a.Model, Prompt: a.Prompt, System: a.System, Format: a.Format, NumPredict: limit})
+	request := ollama.GenerateRequest{Model: a.Model, Prompt: a.Prompt, System: a.System, Format: a.Format, NumPredict: limit, Think: a.Think}
+	var generation ollama.GenerationResult
+	var err error
+	if rich, ok := w.gen.(thinkingGenerator); ok {
+		generation, err = rich.GenerateResult(jctx, request)
+	} else if a.Think != nil {
+		err = errors.New("worker generator does not support explicit think")
+	} else {
+		generation.Response, err = w.gen.Generate(jctx, request)
+	}
 	if err == nil {
 		<-firstAck
 	}
@@ -763,12 +772,15 @@ func (w *Worker) runJob(ctx context.Context, a protocol.Assignment) {
 		w.log.Printf("job %s: lease revoked; dropped", a.JobID)
 		return
 	}
-	res := protocol.ResultRequest{LeaseID: a.LeaseID, Output: out}
+	res := protocol.ResultRequest{LeaseID: a.LeaseID, Output: generation.Response, Thinking: generation.Thinking, DoneReason: generation.DoneReason}
 	if err != nil {
 		res = protocol.ResultRequest{LeaseID: a.LeaseID, Error: err.Error()}
 		if ctx.Err() != nil {
 			res.Error = "worker shutting down"
 		}
+	}
+	if len(res.Error) > 4096 {
+		res.Error = "generation failed: diagnostic exceeds byte limit"
 	}
 	// Post even while shutting down so the caller learns now, not at the deadline.
 	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -784,4 +796,16 @@ func (w *Worker) runJob(ctx context.Context, a protocol.Assignment) {
 	default:
 		w.log.Printf("job %s: done in %s", a.JobID, time.Since(start).Round(time.Millisecond))
 	}
+}
+
+type thinkingGenerator interface {
+	GenerateResult(context.Context, ollama.GenerateRequest) (ollama.GenerationResult, error)
+}
+
+func (w *Worker) features() []string {
+	features := []string{protocol.FeatureAck}
+	if _, ok := w.gen.(thinkingGenerator); ok {
+		features = append(features, protocol.FeatureThink)
+	}
+	return features
 }

@@ -23,6 +23,7 @@ var (
 	ErrCallerCapacity = errors.New("caller queue capacity exhausted")
 	ErrCapacity       = errors.New("queue capacity exhausted")
 	ErrResultTooLarge = errors.New("result payload exceeds maximum bytes")
+	ErrResultInvalid  = errors.New("result cannot combine success metadata with an error")
 	ErrOwner          = errors.New("caller identity is required")
 	// ErrLease means the lease is unknown, expired, already used, or held by another worker.
 	ErrLease = errors.New("lease is not valid")
@@ -54,6 +55,8 @@ type job struct {
 	leaseID        string
 	workerID       string
 	output         string
+	thinking       string
+	doneReason     string
 	err            string
 	acked          bool          // the lease holder acknowledged the assignment
 	done           chan struct{} // closed when state becomes done, failed, expired or cancelled
@@ -124,6 +127,7 @@ func (q *Queue) SubmitKey(owner, key string, req protocol.SubmitRequest) (string
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.cleanupLocked()
+	req.Think = cloneThink(req.Think)
 	if id, found, err := q.replayLocked(owner, key, req); found || err != nil {
 		return id, err
 	}
@@ -177,6 +181,10 @@ func (q *Queue) Claim(ctx context.Context, workerID string, models []string, cap
 }
 
 func (q *Queue) ClaimWithAck(ctx context.Context, workerID string, models []string, capacity int, ackWindow time.Duration) (*protocol.Assignment, error) {
+	return q.ClaimWithFeatures(ctx, workerID, models, capacity, ackWindow, nil)
+}
+
+func (q *Queue) ClaimWithFeatures(ctx context.Context, workerID string, models []string, capacity int, ackWindow time.Duration, features []string) (*protocol.Assignment, error) {
 	defer q.flushExpirations()
 	for {
 		q.mu.Lock()
@@ -190,7 +198,7 @@ func (q *Queue) ClaimWithAck(ctx context.Context, workerID string, models []stri
 			if q.leases[workerID] >= capacity {
 				break
 			}
-			if !slices.Contains(models, j.req.Model) || !now.Before(j.deadline) {
+			if !slices.Contains(models, j.req.Model) || !now.Before(j.deadline) || (j.req.Think != nil && !slices.Contains(features, protocol.FeatureThink)) {
 				continue
 			}
 			next := *j
@@ -220,6 +228,7 @@ func (q *Queue) ClaimWithAck(ctx context.Context, workerID string, models []stri
 				System:         j.req.System,
 				Format:         j.req.Format,
 				NumPredict:     j.req.NumPredict,
+				Think:          cloneThink(j.req.Think),
 			}
 			q.mu.Unlock()
 			return a, nil
@@ -240,6 +249,11 @@ func (q *Queue) ClaimWithAck(ctx context.Context, workerID string, models []stri
 // Complete records the result of a leased job. Only the worker holding the
 // live lease may complete it; errMsg != "" marks the job failed.
 func (q *Queue) Complete(jobID, leaseID, workerID, output, errMsg string) error {
+	return q.CompleteResult(jobID, workerID, protocol.ResultRequest{LeaseID: leaseID, Output: output, Error: errMsg})
+}
+
+func (q *Queue) CompleteResult(jobID, workerID string, result protocol.ResultRequest) error {
+	leaseID, output, errMsg := result.LeaseID, result.Output, result.Error
 	defer q.flushExpirations()
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -252,14 +266,18 @@ func (q *Queue) Complete(jobID, leaseID, workerID, output, errMsg string) error 
 	if !ok || j.state != protocol.StateLeased || j.leaseID != leaseID || j.workerID != workerID || !now.Before(j.deadline) {
 		return ErrLease
 	}
-	if len(output) > MaxResultBytes-len(errMsg) {
+	if _, fits := boundedRequestBytes(MaxResultBytes, output, errMsg, result.Thinking, result.DoneReason); !fits {
 		return ErrResultTooLarge
+	}
+	if errMsg != "" && (output != "" || result.Thinking != "" || result.DoneReason != "") {
+		return ErrResultInvalid
 	}
 	next := *j
 	if errMsg != "" {
 		next.state, next.err = protocol.StateFailed, errMsg
 	} else {
 		next.state, next.output = protocol.StateDone, output
+		next.thinking, next.doneReason = result.Thinking, result.DoneReason
 	}
 	next = q.prepareTerminalAt(&next, now)
 	if err := q.persistLocked(&next); err != nil {
@@ -376,7 +394,7 @@ func (q *Queue) Cancel(owner, jobID string) (protocol.JobStatus, error) {
 		return protocol.JobStatus{}, ErrNotFound
 	}
 	if !active(j) {
-		st := protocol.JobStatus{JobID: j.id, State: j.state, Output: j.output, Error: j.err}
+		st := protocol.JobStatus{JobID: j.id, State: j.state, Output: j.output, Error: j.err, Thinking: j.thinking, DoneReason: j.doneReason}
 		if j.state == protocol.StateCancelled {
 			return st, nil
 		}
@@ -461,7 +479,7 @@ func (q *Queue) Wait(ctx context.Context, owner, jobID string) (protocol.JobStat
 	if !q.now().Before(j.deadline) {
 		q.expireLocked(j)
 	}
-	st := protocol.JobStatus{JobID: j.id, State: j.state, Output: j.output, Error: j.err}
+	st := protocol.JobStatus{JobID: j.id, State: j.state, Output: j.output, Error: j.err, Thinking: j.thinking, DoneReason: j.doneReason}
 	q.mu.Unlock()
 	q.notify(j)
 	return st, nil
@@ -572,4 +590,12 @@ func (q *Queue) StorageError() error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.storageErrorLocked()
+}
+
+func cloneThink(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }

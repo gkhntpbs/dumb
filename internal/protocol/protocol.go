@@ -3,6 +3,8 @@
 package protocol
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -31,6 +33,8 @@ const MaxDeadlineMS = 600000
 
 const MaxNumPredict = 128
 
+const MaxResultBytes = 1 << 20
+
 type Error struct {
 	Error string `json:"error"`
 }
@@ -57,6 +61,8 @@ type HelloRequest struct {
 // FeatureAck: the worker acknowledges every assignment with
 // POST /v1/jobs/{id}/ack, and the server may revoke an unacknowledged lease.
 const FeatureAck = "ack"
+
+const FeatureThink = "think"
 
 // AckRequest acknowledges an assignment.
 type AckRequest struct {
@@ -85,6 +91,7 @@ type SubmitRequest struct {
 	Prompt     string `json:"prompt"`
 	System     string `json:"system,omitempty"`
 	Format     string `json:"format,omitempty"`
+	Think      *bool  `json:"think,omitempty"`
 	NumPredict int    `json:"num_predict,omitempty"`
 	DeadlineMS int    `json:"deadline_ms"`
 }
@@ -97,20 +104,25 @@ type Assignment struct {
 	Prompt         string    `json:"prompt"`
 	System         string    `json:"system,omitempty"`
 	Format         string    `json:"format,omitempty"`
+	Think          *bool     `json:"think,omitempty"`
 	NumPredict     int       `json:"num_predict"`
 }
 
 type ResultRequest struct {
-	LeaseID string `json:"lease_id"`
-	Output  string `json:"output,omitempty"`
-	Error   string `json:"error,omitempty"`
+	LeaseID    string `json:"lease_id"`
+	Output     string `json:"output,omitempty"`
+	Thinking   string `json:"thinking,omitempty"`
+	DoneReason string `json:"done_reason,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 type JobStatus struct {
-	JobID  string `json:"job_id"`
-	State  string `json:"state"`
-	Output string `json:"output,omitempty"`
-	Error  string `json:"error,omitempty"`
+	JobID      string `json:"job_id"`
+	State      string `json:"state"`
+	Output     string `json:"output,omitempty"`
+	Thinking   string `json:"thinking,omitempty"`
+	DoneReason string `json:"done_reason,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 type Status struct {
@@ -242,4 +254,18 @@ func (v ReleaseVersion) String() string {
 		return v.SemVer.String()
 	}
 	return v.SemVer.String() + "-" + v.Pre
+}
+
+func (r *SubmitRequest) UnmarshalJSON(data []byte) error {
+	type wire SubmitRequest
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for key, value := range fields {
+		if strings.EqualFold(key, "think") && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf("think must be a boolean when present")
+		}
+	}
+	return json.Unmarshal(data, (*wire)(r))
 }

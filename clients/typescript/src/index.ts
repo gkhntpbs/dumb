@@ -47,7 +47,7 @@ export interface ExecuteOptions<T> extends RequestOptions {
 }
 
 export type ExecutionResult<T> =
-  | { source: "dumb"; output: string; job: JobStatus }
+  | { source: "dumb"; output: string; thinking?: string; done_reason?: string; job: JobStatus }
   | { source: "fallback"; value: T; reason: FallbackReason };
 
 export class HTTPError extends Error {
@@ -81,7 +81,7 @@ function object(value: unknown): value is Record<string, unknown> {
 }
 
 function jobStatus(value: unknown): JobStatus {
-  if (!object(value) || typeof value.job_id !== "string" || !["queued", "leased", "done", "failed", "expired", "cancelled"].includes(String(value.state)) || (value.output !== undefined && typeof value.output !== "string") || (value.error !== undefined && typeof value.error !== "string")) {
+  if (!object(value) || typeof value.job_id !== "string" || !["queued", "leased", "done", "failed", "expired", "cancelled"].includes(String(value.state)) || (value.output !== undefined && typeof value.output !== "string") || (value.error !== undefined && typeof value.error !== "string") || (value.thinking !== undefined && typeof value.thinking !== "string") || (value.done_reason !== undefined && typeof value.done_reason !== "string")) {
     throw new ProtocolError("Invalid job status response");
   }
   return value as unknown as JobStatus;
@@ -93,6 +93,7 @@ function waitQuery(waitMs: number = 0): string {
 }
 
 function validateRequest(request: SubmitRequest): void {
+  if (request.think !== undefined && typeof request.think !== "boolean") throw new TypeError("think must be a boolean");
   if (!Number.isInteger(request.deadline_ms) || request.deadline_ms < 1 || request.deadline_ms > limits.maxDeadlineMs) throw new RangeError("deadline_ms is out of range");
   if (request.num_predict !== undefined && (!Number.isInteger(request.num_predict) || request.num_predict < 0 || request.num_predict > limits.maxNumPredict)) throw new RangeError("num_predict is out of range");
 }
@@ -239,7 +240,7 @@ export class DUMBClient {
         if (remaining <= 0) throw new JobError(reason, job);
         job = await this.getJob(job.job_id, { ...pending, waitMs: remaining });
       }
-      if (job.state === "done") return { source: "dumb", output: job.output ?? "", job };
+      if (job.state === "done") return { source: "dumb", output: job.output ?? "", ...(job.thinking !== undefined ? { thinking: job.thinking } : {}), ...(job.done_reason !== undefined ? { done_reason: job.done_reason } : {}), job };
       if (job.state === "cancelled") throw new JobError("cancelled", job);
       fallbackReason = job.state === "expired" ? "expired" : "failed";
     } catch (error) {

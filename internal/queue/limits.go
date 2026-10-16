@@ -6,7 +6,7 @@ import (
 	"github.com/gkhntpbs/dumb/internal/protocol"
 )
 
-const MaxResultBytes = 1 << 20
+const MaxResultBytes = protocol.MaxResultBytes
 
 type Limits struct {
 	MaxActiveJobs       int

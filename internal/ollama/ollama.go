@@ -225,6 +225,7 @@ func (c *Client) Pull(ctx context.Context, model string, progress func(Progress)
 
 // GenerateRequest is one non-streaming completion.
 type GenerateRequest struct {
+	Think      *bool
 	Model      string
 	Prompt     string
 	System     string
@@ -232,9 +233,22 @@ type GenerateRequest struct {
 	NumPredict int
 }
 
-// Generate runs one completion and returns the response text.
+type GenerationResult struct {
+	Response   string `json:"response"`
+	Thinking   string `json:"thinking"`
+	DoneReason string `json:"done_reason"`
+}
+
 func (c *Client) Generate(ctx context.Context, r GenerateRequest) (string, error) {
+	result, err := c.GenerateResult(ctx, r)
+	return result.Response, err
+}
+
+func (c *Client) GenerateResult(ctx context.Context, r GenerateRequest) (GenerationResult, error) {
 	body := map[string]any{"model": r.Model, "prompt": r.Prompt, "stream": false}
+	if r.Think != nil {
+		body["think"] = *r.Think
+	}
 	if r.System != "" {
 		body["system"] = r.System
 	}
@@ -245,23 +259,41 @@ func (c *Client) Generate(ctx context.Context, r GenerateRequest) (string, error
 		r.NumPredict = protocol.MaxNumPredict
 	}
 	if r.NumPredict < 1 || r.NumPredict > protocol.MaxNumPredict {
-		return "", errors.New("ollama: num_predict out of range")
+		return GenerationResult{}, errors.New("ollama: num_predict out of range")
 	}
 	body["options"] = map[string]int{"num_predict": r.NumPredict}
 	res, err := c.do(ctx, http.MethodPost, "/api/generate", body)
 	if err != nil {
-		return "", err
+		return GenerationResult{}, err
 	}
 	defer res.Body.Close()
-	var v struct {
-		Response string `json:"response"`
-		Error    string `json:"error"`
+	const maxDocumentBytes = 6*protocol.MaxResultBytes + (64 << 10)
+	data, err := io.ReadAll(io.LimitReader(res.Body, maxDocumentBytes+1))
+	if err != nil {
+		return GenerationResult{}, fmt.Errorf("ollama: generate: %w", err)
 	}
-	if err := json.NewDecoder(res.Body).Decode(&v); err != nil {
-		return "", fmt.Errorf("ollama: generate: %w", err)
+	if len(data) > maxDocumentBytes {
+		return GenerationResult{}, errors.New("ollama: generate response exceeds byte limit")
+	}
+	var v struct {
+		GenerationResult
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return GenerationResult{}, fmt.Errorf("ollama: generate: %w", err)
+	}
+	remaining := protocol.MaxResultBytes
+	for _, field := range []string{v.Response, v.Thinking, v.DoneReason, v.Error} {
+		if len(field) > remaining {
+			return GenerationResult{}, errors.New("ollama: generation fields exceed byte limit")
+		}
+		remaining -= len(field)
 	}
 	if v.Error != "" {
-		return "", fmt.Errorf("ollama: generate: %s", v.Error)
+		if len(v.Error) > 4096 {
+			return GenerationResult{}, errors.New("ollama: backend diagnostic exceeds byte limit")
+		}
+		return GenerationResult{}, fmt.Errorf("ollama: generate: %s", v.Error)
 	}
-	return v.Response, nil
+	return v.GenerationResult, nil
 }

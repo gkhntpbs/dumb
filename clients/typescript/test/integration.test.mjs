@@ -93,3 +93,24 @@ test("actual Go server: cancel queued and leased jobs, repeat, after completion 
   await assert.rejects(client.cancel("missing"), error => error instanceof HTTPError && error.status === 404);
   assert.equal((await worker("/v1/workers/goodbye")).status, 204);
 });
+
+test("actual Go server: explicit thinking needs capability and preserves separate reasoning", async () => {
+  const hello = features => worker("/v1/workers/hello", "POST", { worker_version: "0.1.0", protocol_version: 1, models: ["fixture"], capacity: 1, features });
+  assert.equal((await hello(["ack"])).status, 200);
+  await assert.rejects(client.submit({ ...input, think: false }), error => error instanceof HTTPError && error.status === 503);
+  assert.equal((await hello(["ack", "think"])).status, 200);
+  for (const think of [false, true]) {
+    const execution = client.execute({ ...input, think });
+    const assignment = await (await worker("/v1/jobs/next?wait=500ms", "GET")).json();
+    assert.equal(assignment.think, think);
+    assert.equal((await worker(`/v1/jobs/${assignment.job_id}/ack`, "POST", { lease_id: assignment.lease_id })).status, 204);
+    assert.equal((await worker(`/v1/jobs/${assignment.job_id}/result`, "POST", {
+      lease_id: assignment.lease_id, output: think ? "" : "answer", thinking: think ? "reasoning" : "", done_reason: think ? "length" : "stop",
+    })).status, 204);
+    const result = await execution;
+    assert.equal(result.output, think ? "" : "answer");
+    assert.equal(result.thinking ?? "", think ? "reasoning" : "");
+    assert.equal(result.done_reason, think ? "length" : "stop");
+  }
+  assert.equal((await worker("/v1/workers/goodbye")).status, 204);
+});

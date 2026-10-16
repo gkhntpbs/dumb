@@ -32,6 +32,8 @@ type StoreConfig struct {
 }
 
 type storedJob struct {
+	Thinking, DoneReason                           string
+	ThinkSet, ThinkValue                           bool
 	Version                                        int
 	ID, Owner, Key                                 string
 	Digest                                         [32]byte
@@ -60,7 +62,12 @@ type stateStore struct {
 }
 
 func recordOf(j *job) storedJob {
-	return storedJob{Allocation: j.diskCharge, Version: 1, ID: j.id, Owner: j.owner, Key: j.key, Digest: j.digest, Request: j.req, Created: j.created, Leased: j.leased, Deadline: j.deadline, RetainUntil: j.retainUntil, AckDue: j.ackDue, State: j.state, LeaseID: j.leaseID, WorkerID: j.workerID, Output: j.output, Error: j.err, Acked: j.acked, Order: j.order}
+	record := storedJob{Allocation: j.diskCharge, Version: 1, ID: j.id, Owner: j.owner, Key: j.key, Digest: j.digest, Request: j.req, Created: j.created, Leased: j.leased, Deadline: j.deadline, RetainUntil: j.retainUntil, AckDue: j.ackDue, State: j.state, LeaseID: j.leaseID, WorkerID: j.workerID, Output: j.output, Error: j.err, Thinking: j.thinking, DoneReason: j.doneReason, Acked: j.acked, Order: j.order}
+	if j.req.Think != nil {
+		record.ThinkSet = true
+		record.ThinkValue = *j.req.Think
+	}
+	return record
 }
 
 func encodeRecord(r storedJob) ([]byte, error) {
@@ -90,6 +97,14 @@ func decodeRecord(data []byte) (storedJob, error) {
 	if err := decoder.Decode(&r); err != nil {
 		return r, ErrStorage
 	}
+	if !r.ThinkSet && (r.Request.Think != nil || r.ThinkValue) {
+		return r, ErrStorage
+	}
+	if r.ThinkSet {
+		r.Request.Think = cloneThink(&r.ThinkValue)
+	} else {
+		r.Request.Think = nil
+	}
 	var extra storedJob
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return r, ErrStorage
@@ -109,16 +124,19 @@ func decodeRecord(data []byte) (storedJob, error) {
 	if r.Key != "" && r.Digest == ([32]byte{}) {
 		return r, ErrStorage
 	}
-	if (r.State == protocol.StateQueued || r.State == protocol.StateLeased) && (r.Output != "" || r.Error != "" || r.Key != "" && r.Digest != payloadDigest(r.Request)) {
+	if (r.State == protocol.StateQueued || r.State == protocol.StateLeased) && (r.Output != "" || r.Error != "" || r.Thinking != "" || r.DoneReason != "" || r.Key != "" && r.Digest != payloadDigest(r.Request)) {
 		return r, ErrStorage
 	}
-	if r.State == protocol.StateDone && r.Error != "" || r.State == protocol.StateFailed && (r.Error == "" || r.Output != "") || (r.State == protocol.StateExpired || r.State == protocol.StateCancelled) && (r.Output != "" || r.Error != "") {
+	if r.State == protocol.StateDone && r.Error != "" || r.State == protocol.StateFailed && (r.Error == "" || r.Output != "" || r.Thinking != "" || r.DoneReason != "") || (r.State == protocol.StateExpired || r.State == protocol.StateCancelled) && (r.Output != "" || r.Error != "" || r.Thinking != "" || r.DoneReason != "") {
 		return r, ErrStorage
 	}
 	if !r.RetainUntil.IsZero() && (r.RetainUntil.After(r.Deadline.Add(Retention)) || r.RetainUntil.Before(r.Created.Add(Retention))) {
 		return r, ErrStorage
 	}
 	if r.State == protocol.StateExpired && !r.RetainUntil.Equal(r.Deadline.Add(Retention)) {
+		return r, ErrStorage
+	}
+	if _, fits := boundedRequestBytes(MaxResultBytes, r.Output, r.Error, r.Thinking, r.DoneReason); !fits {
 		return r, ErrStorage
 	}
 	switch r.State {
@@ -137,7 +155,7 @@ func decodeRecord(data []byte) (storedJob, error) {
 		if r.Allocation != 0 {
 			return r, ErrStorage
 		}
-		if r.RetainUntil.IsZero() || r.Request.Prompt != "" || r.Request.System != "" || r.Request.Format != "" || r.Request.NumPredict != 0 || len(r.Output) > MaxResultBytes-len(r.Error) {
+		if r.RetainUntil.IsZero() || r.Request.Prompt != "" || r.Request.System != "" || r.Request.Format != "" || r.Request.NumPredict != 0 || r.Request.Think != nil {
 			return r, ErrStorage
 		}
 	default:

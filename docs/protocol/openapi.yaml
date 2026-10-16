@@ -526,8 +526,11 @@ paths:
       operationId: submitResult
       summary: Post the result of a leased job.
       description: >
-        The combined UTF-8 output and error payload may not exceed 1048576
+        The combined UTF-8 output, thinking, done_reason and error payload may not exceed 1048576
         bytes. Larger results receive 400 without completing the lease.
+        This endpoint accepts an encoded JSON request body up to 6356992 bytes
+        (6 MiB plus 64 KiB) to accommodate JSON escaping of the decoded payload.
+        Other request bodies remain limited to 1048576 bytes.
       parameters:
         - $ref: "#/components/parameters/WorkerVersion"
         - $ref: "#/components/parameters/RequestID"
@@ -979,7 +982,8 @@ components:
           items: { type: string }
           description: >
             Optional protocol behaviours this worker supports. Known: `ack`
-            (acknowledges assignments, see `POST /v1/jobs/{id}/ack`). Unknown
+            (acknowledges assignments, see `POST /v1/jobs/{id}/ack`) and `think`
+            (preserves explicit boolean thinking control and separate reasoning/result metadata). Unknown
             values are ignored.
     HelloResponse:
       type: object
@@ -1021,6 +1025,14 @@ components:
           type: string
           enum: ["", json]
           description: "`json` asks the model for strict JSON output."
+        think:
+          type: boolean
+          description: >
+            Optional thinking control. Omitted preserves the backend default; false
+            explicitly disables thinking and true enables it for supported models.
+            Only boolean values are accepted, not named thinking levels. Explicit
+            values require a worker advertising the `think` feature; no suitable
+            online worker returns 503. Unsupported models may reject the request.
         num_predict:
           type: integer
           minimum: 0
@@ -1043,6 +1055,9 @@ components:
         prompt: { type: string }
         system: { type: string }
         format: { type: string }
+        think:
+          type: boolean
+          description: Optional explicit thinking control, forwarded unchanged to Ollama.
         num_predict:
           type: integer
           minimum: 1
@@ -1056,10 +1071,16 @@ components:
     ResultRequest:
       type: object
       required: [lease_id]
-      description: Exactly one of `output` or `error`.
+      description: >
+        A successful result may contain output, thinking and done_reason. Thinking
+        is separate from user-visible output and may be the only generated text
+        when the token limit is reached. Failed results contain error. The combined
+        UTF-8 output, thinking, done_reason and error payload is limited to 1048576 bytes.
       properties:
         lease_id: { type: string }
         output: { type: string }
+        thinking: { type: string, description: Separate model reasoning, when returned by the backend. }
+        done_reason: { type: string, description: Backend completion reason, such as stop or length. }
         error: { type: string }
     JobStatus:
       type: object
@@ -1070,6 +1091,8 @@ components:
           type: string
           enum: [queued, leased, done, failed, expired, cancelled]
         output: { type: string }
+        thinking: { type: string, description: Separate model reasoning; never merged into output. }
+        done_reason: { type: string, description: Backend completion reason, when available. }
         error: { type: string }
     Status:
       type: object

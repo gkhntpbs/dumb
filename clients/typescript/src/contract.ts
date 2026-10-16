@@ -433,6 +433,7 @@ export interface components {
             prompt: string;
             system?: string;
             format?: "" | "json";
+            think?: boolean;
             num_predict: number;
             deadline_ms: number;
         };
@@ -444,6 +445,7 @@ export interface components {
             prompt: string;
             system?: string;
             format?: string;
+            think?: boolean;
             num_predict: number;
         };
         AckRequest: {
@@ -452,12 +454,16 @@ export interface components {
         ResultRequest: {
             lease_id: string;
             output?: string;
+            thinking?: string;
+            done_reason?: string;
             error?: string;
         };
         JobStatus: {
             job_id: string;
             state: "queued" | "leased" | "done" | "failed" | "expired" | "cancelled";
             output?: string;
+            thinking?: string;
+            done_reason?: string;
             error?: string;
         };
         Status: {
